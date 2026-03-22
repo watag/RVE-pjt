@@ -1,0 +1,23 @@
+tickers:
+  # 対象
+  - symbol: 7203.T
+    name: toyota
+
+  # 因子
+  - symbol: 1540.T
+    name: gold
+
+  - symbol: 1306.T
+    name: topix
+
+  - symbol: ^GSPC
+    name: sp500
+
+  - symbol: TLT
+    name: ust
+
+  - symbol: 2510.T
+    name: jgb
+
+  - symbol: JPY=X
+    name: usd_jpy

@@ -21,8 +21,11 @@ def calc_beta(asset_df, factor_df, window=120):
     df = asset_df[["Date", "log_return"]].merge(
         factor_df[["Date", "log_return"]],
         on="Date",
+        how="left",
         suffixes=("_asset", "_factor")
     )
+
+    df["log_return_factor"] = df["log_return_factor"].ffill().bfill()
 
     betas = []
 
@@ -33,15 +36,22 @@ def calc_beta(asset_df, factor_df, window=120):
 
         w = df.iloc[i-window:i]
 
+        if w["log_return_factor"].isna().any():
+            betas.append(np.nan)
+            continue
+
         cov = np.cov(w["log_return_asset"], w["log_return_factor"])[0, 1]
         var = np.var(w["log_return_factor"])
 
-        beta = cov / var if var != 0 else np.nan
+        if var == 0 or np.isnan(var):
+            betas.append(np.nan)
+            continue
+
+        beta = cov / var
         betas.append(beta)
 
     df["beta"] = betas
     return df[["Date", "beta"]]
-
 
 def calc_all_betas(asset_df, factor_dict, window=120):
     result = asset_df[["Date"]].copy()

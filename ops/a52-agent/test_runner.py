@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local, network-free tests for runner parsing and Git publish behavior."""
 
+import json
 import os
 import subprocess
 import sys
@@ -15,6 +16,40 @@ import runner
 def git(args, cwd=None):
     return subprocess.run(["git", *args], cwd=cwd, check=True, text=True,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.strip()
+
+
+class CodexJsonlTests(unittest.TestCase):
+    def check_lines(self, lines):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "codex.log"
+            log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return runner.has_sandbox_boundary_violation(log_path)
+
+    def test_exit_182_is_sandbox_boundary_violation(self):
+        event = {"type": "item.completed", "item": {
+            "type": "command_execution", "status": "failed", "exit_code": 182,
+        }}
+        self.assertTrue(self.check_lines([json.dumps(event)]))
+
+    def test_normal_command_failure_is_not_sandbox_violation(self):
+        event = {"type": "item.completed", "item": {
+            "type": "command_execution", "status": "failed", "exit_code": 1,
+        }}
+        self.assertFalse(self.check_lines([json.dumps(event)]))
+
+    def test_invalid_json_is_ignored(self):
+        self.assertFalse(self.check_lines(["not valid JSON", "{"]))
+
+    def test_other_event_types_do_not_trigger_violation(self):
+        events = [
+            {"type": "turn.completed", "item": {
+                "type": "command_execution", "status": "failed", "exit_code": 182,
+            }},
+            {"type": "item.completed", "item": {
+                "type": "agent_message", "status": "failed", "exit_code": 182,
+            }},
+        ]
+        self.assertFalse(self.check_lines([json.dumps(event) for event in events]))
 
 
 class TaskFormatTests(unittest.TestCase):
@@ -52,7 +87,11 @@ class LocalGitFlowTests(unittest.TestCase):
         git(["push", "origin", "main"], cwd=repo)
         fake = base / "fake-codex"
         fake.write_text(
-            f"#!/bin/sh\n{codex_body}\nexit {codex_exit}\n", encoding="utf-8")
+            "#!/bin/sh\n"
+            "has_json=0\n"
+            "for arg in \"$@\"; do [ \"$arg\" = --json ] && has_json=1; done\n"
+            "[ \"$has_json\" = 1 ] || exit 90\n"
+            f"{codex_body}\nexit {codex_exit}\n", encoding="utf-8")
         fake.chmod(0o755)
         os.environ["RVE_CODEX"] = str(fake)
         return temp, bare, repo, state, task_content
@@ -101,6 +140,29 @@ class LocalGitFlowTests(unittest.TestCase):
         self.assertIn("Status: **FAILED**", result)
         with self.assertRaises(subprocess.CalledProcessError):
             git(["--git-dir", str(bare), "cat-file", "-e", "refs/heads/agent/task-sample-task:partial.txt"])
+
+    def test_sandbox_violation_event_publishes_failure(self):
+        event = json.dumps({"type": "item.completed", "item": {
+            "type": "command_execution", "status": "failed", "exit_code": 182,
+        }})
+        temp, bare, repo, state, content = self.make_fixture(0, f"echo '{event}'")
+        self.addCleanup(temp.cleanup)
+        task = runner.parse_task(Path("agent/tasks/sample-task.md"), content)
+        runner.AgentRunner(repo, state, 60, 30).handle(task)
+        result = git(["--git-dir", str(bare), "show", "refs/heads/agent/task-sample-task:agent/results/sample-task.md"])
+        self.assertIn("Codex sandbox boundary violation detected; see A52 logs", result)
+        self.assertIn("Status: **FAILED**", result)
+
+    def test_normal_command_failure_event_can_recover(self):
+        event = json.dumps({"type": "item.completed", "item": {
+            "type": "command_execution", "status": "failed", "exit_code": 1,
+        }})
+        temp, bare, repo, state, content = self.make_fixture(0, f"echo '{event}'\necho recovered > recovered.txt")
+        self.addCleanup(temp.cleanup)
+        task = runner.parse_task(Path("agent/tasks/sample-task.md"), content)
+        runner.AgentRunner(repo, state, 60, 30).handle(task)
+        result = git(["--git-dir", str(bare), "show", "refs/heads/agent/task-sample-task:agent/results/sample-task.md"])
+        self.assertIn("Status: **SUCCESS**", result)
 
 
 if __name__ == "__main__":

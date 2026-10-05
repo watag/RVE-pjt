@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -29,6 +30,7 @@ BLOCKED_NAMES = {".env", ".env.local", "id_rsa", "id_ed25519", "credentials", "s
 RUNNER_NAME = "RVE Agent"
 RUNNER_EMAIL = "337881019+rveagent@users.noreply.github.com"
 MAX_TASK_BYTES = 60 * 1024
+SANDBOX_DENIED_EXIT_CODE = 182
 
 
 class RunnerError(Exception):
@@ -164,6 +166,29 @@ At the end, summarize changes, checks performed, and unresolved issues. Do not
 include secret values in your response."""
 
 
+def has_sandbox_boundary_violation(log_path: Path) -> bool:
+    """Check Codex JSONL for a command denied by the workspace sandbox."""
+    try:
+        with log_path.open("r", encoding="utf-8", errors="replace") as log_file:
+            for line in log_file:
+                try:
+                    event = json.loads(line)
+                except (json.JSONDecodeError, TypeError):
+                    # Keep malformed lines in the log, but ignore them here.
+                    continue
+                if not isinstance(event, dict) or event.get("type") != "item.completed":
+                    continue
+                item = event.get("item")
+                if not isinstance(item, dict) or item.get("type") != "command_execution":
+                    continue
+                if (item.get("status") == "failed"
+                        and item.get("exit_code") == SANDBOX_DENIED_EXIT_CODE):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def write_result(path: Path, task: Task, status: str, reason: str) -> None:
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     text = (
@@ -263,9 +288,8 @@ class AgentRunner:
         prompt = codex_prompt(task, agents_path.read_text(encoding="utf-8"))
         command = [
             codex, "exec", "--sandbox", "workspace-write",
-            "--ask-for-approval", "never", "--ephemeral",
             "--config", "sandbox_workspace_write.network_access=false",
-            "--cd", str(worktree), prompt,
+            "--cd", str(worktree), "--json", prompt,
         ]
         # Do not let task code inherit credentials that Git/Codex may use.
         child_env = os.environ.copy()
@@ -283,6 +307,12 @@ class AgentRunner:
         except (OSError, subprocess.TimeoutExpired):
             self.publish_failure(task, worktree, branch, base_sha,
                                  "Codex failed or timed out; see A52 logs")
+            return
+        if has_sandbox_boundary_violation(log_path):
+            self.publish_failure(
+                task, worktree, branch, base_sha,
+                "Codex sandbox boundary violation detected; see A52 logs",
+            )
             return
         if result.returncode != 0:
             self.publish_failure(task, worktree, branch, base_sha,

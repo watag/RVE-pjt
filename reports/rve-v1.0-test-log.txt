@@ -1,0 +1,30 @@
+RVE v1.0 re-audit verification log
+Date: 2026-10-25 UTC
+Worktree: /tmp/rve-v1.0-audit
+Branch: agent/rve-v1.0-audit
+Base HEAD: 7fd22b2a77d37dcdd02064cea2f911635d4432e2
+
+Latest local validation (after the current PR worktree code changes):
+- Python: Python 3.12; NumPy 2.4.3; pandas 3.0.1; PyYAML 6.0.3
+- Command: PYTHONPYCACHEPREFIX=/tmp/rve-v1-pycache /tmp/rve-layer1-ubuntu-venv/bin/python -m unittest discover -s tests -v
+- Result: 72 tests, 72 passed, 0 failures/errors.
+- Command: python -m compileall -q layer1 fetch scripts tests
+- Result: passed.
+- Node: v18.19.1 (CI workflow uses Node 22)
+- Command: node --test tests/test_ui_preview.js
+- Result: 7 tests passed, 0 failures.
+- Command: node --check reports/risk-vector-preview.js
+- Result: passed.
+- Command: git diff --check
+- Result: passed.
+
+Live data:
+- `fetch_and_save` completed an initial download and a second incremental update for all seven configured series using Yahoo Finance/yfinance into /tmp/rve-fetcher-live-check. Row counts and oldest dates were preserved across the second update (2021-11-01 through 2026-10-23); repository data files were not touched.
+- `main()` completed using the separate five-year real-data snapshot in /tmp/rve-v1-calibration and produced seven raw and seven normalized `ok` statuses for 7203.T as of 2026-10-23. Portfolio status was not_configured.
+- Browser validation attempted with Playwright Chromium. Browser could not start because `libnspr4.so` is absent. No system package was installed. No screenshot or Pages validation is claimed.
+
+GitHub Actions:
+- No CI result exists for the current uncommitted worktree. Previously reported success belongs to an older commit and is not evidence for this revision.
+- No commit, push, or merge was performed in this worktree.
+
+Historical test log below this header was removed because it referred to superseded snapshots and could be mistaken for current evidence. See reports/rve-v1.0-reaudit.md for scope and remaining limits.

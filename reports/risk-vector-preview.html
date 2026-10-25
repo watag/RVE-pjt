@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RVE | リスク分析</title>
+  <style>
+    :root{color-scheme:dark;--bg:#10151d;--panel:#19222e;--line:#2b3949;--muted:#a8b6c7;--text:#edf4fb;--blue:#70b7ff;--red:#ff8585;--gold:#f3c96b;--green:#55d6a3}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 15% 0,#203143 0,transparent 42%),var(--bg);color:var(--text);font:15px/1.55 system-ui,sans-serif}
+    main{max-width:1180px;margin:auto;padding:34px 20px 60px}.muted,.detail{color:var(--muted)}.detail{font-size:12px}.badge{display:inline-block;border:1px solid #365c4d;background:#172c26;color:#a4f0cf;border-radius:99px;padding:4px 10px;font-size:12px}.error{border-color:#854f4f;background:#351d20;color:#ffcaca}
+    .tabs{display:flex;gap:8px;border-bottom:1px solid var(--line);margin:24px 0 18px}.tabs button{border:1px solid transparent;border-bottom:0;border-radius:9px 9px 0 0;background:transparent;color:var(--muted);padding:10px 17px;font:inherit;cursor:pointer}.tabs button[aria-selected="true"]{color:var(--text);background:var(--panel);border-color:var(--line);font-weight:700}.page[hidden]{display:none}
+    .card{background:linear-gradient(145deg,#1c2734,#151d27);border:1px solid var(--line);border-radius:15px;padding:20px;margin:14px 0}.card-inner{margin:18px 0}.card-inner>h2,.card-inner>h3{margin:0 0 12px}.notice{padding:14px;border:1px solid var(--line);border-radius:10px;color:var(--muted);margin:12px 0}.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.stat{border:1px solid var(--line);border-radius:11px;padding:14px;background:#111923}.stat h3{font-size:14px;margin:0;color:var(--muted)}.value{font-size:28px;font-weight:750;font-variant-numeric:tabular-nums}.stat .detail{margin-top:4px}.sensitivity-layout{display:grid;grid-template-columns:minmax(330px,430px) minmax(220px,1fr);gap:16px;align-items:center}.radar{width:100%;height:auto;max-height:410px;display:block}.radar-ring{fill:none;stroke:#344354;stroke-width:1}.zero-ring{stroke:#d0d9e4;stroke-dasharray:5 4}.radar-spoke{stroke:#48596c;stroke-width:1}.radar-label{fill:var(--text);font-size:10px}.radar-ticker{fill:var(--muted);font-size:9px}.radar-tick{fill:var(--muted);font-size:10px}.tick-center{text-anchor:middle}.radar-area{fill:#70b7ff22;stroke:none}.radar-segment{stroke:var(--blue);stroke-width:2.5}.radar-point{stroke:#10151d;stroke-width:2}.radar-point.positive{fill:var(--blue)}.radar-point.negative{fill:var(--red)}.radar-point.zero{fill:var(--gold)}.beta-legend{font-size:13px;color:var(--muted)}
+    .table-scroll{overflow-x:auto}.beta-table{width:100%;border-collapse:collapse;font-size:13px}.beta-table th,.beta-table td{text-align:left;padding:8px;border-bottom:1px solid var(--line)}.beta-table th{font-weight:600}.beta-table th small{display:block;color:var(--muted);font-weight:400}.number{font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap}.clip-state{display:inline-block;color:#ffd27d;font-size:10px;font-weight:600}
+    .trend-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.trend-card{min-width:0;background:#111923;border:1px solid var(--line);border-radius:11px;padding:12px}.trend-card h4{margin:0 0 6px;font-size:13px}.trend-chart{width:100%;height:auto;display:block;overflow:visible}.zero-line{stroke:#718194;stroke-dasharray:4 4}.series-line{stroke-width:2;fill:none}.normalized-line{stroke:var(--green)}.raw-beta-line{stroke:var(--blue)}.series-point{fill:var(--text);stroke:#111923;stroke-width:1}.chart-scale,.chart-date{fill:var(--muted);font-size:9px}.holdings ul{columns:2;margin:8px 0;padding-left:20px}.holdings li{break-inside:avoid;font-variant-numeric:tabular-nums}.foot{margin-top:26px;font-size:12px;color:var(--muted)}
+    @media(max-width:760px){main{padding:24px 14px 44px}.card{padding:15px}.sensitivity-layout{grid-template-columns:1fr;gap:0}.radar{max-width:390px;margin:auto}.stats,.trend-grid{grid-template-columns:1fr}.beta-table{min-width:500px}.tabs button{flex:1;padding:9px 8px}.holdings ul{columns:1}}
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="muted">Risk Vector Engine</div>
+      <h1>リスク分析 <span class="muted" id="asset-symbol"></span></h1>
+      <p><span class="badge" id="status">計算データを確認中</span> <span class="muted" id="asof"></span></p>
+    </header>
+    <div class="tabs" role="tablist" aria-label="分析対象">
+      <button id="individual-tab" role="tab" aria-controls="individual-page" aria-selected="true">個別銘柄</button>
+      <button id="portfolio-tab" role="tab" aria-controls="portfolio-page" aria-selected="false">ポートフォリオ</button>
+    </div>
+    <section id="individual-page" class="page card" role="tabpanel" aria-labelledby="individual-tab"></section>
+    <section id="portfolio-page" class="page card" role="tabpanel" aria-labelledby="portfolio-tab" hidden></section>
+    <section class="card">
+      <h2>算出条件・データ出所</h2>
+      <p class="muted">βはアンカーへの単回帰感応度であり相関係数ではありません。σは年率変動性、ESは損失上位8週の符号付き平均です。正規化値は各指標自身の過去分布との相対的位置です。</p>
+      <p class="muted">アンカーは Gold 1540.T · US Equity ^GSPC · Japan Equity 1306.T · US Treasury TLT · Japan Bond 2510.T。各銘柄は資産クラスのプロキシです。^GSPCは価格指数、ETFの調整後終値は分配金込みとなり得るため、リターン定義が完全には同じでない場合があります。</p>
+      <div class="muted" id="sources"></div>
+    </section>
+    <p class="foot">未生成・不正な計算結果はサンプル値やゼロで代替しません。ローカル実行: <code>python layer1/layer1_vector.py</code></p>
+  </main>
+  <script src="risk-vector-preview.js"></script>
+</body>
+</html>

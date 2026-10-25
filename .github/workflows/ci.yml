@@ -3,9 +3,11 @@ name: RVE Core CI
 on:
   push:
     branches:
+      - main
       - dev
   pull_request:
     branches:
+      - main
       - dev
 
 permissions:
@@ -30,11 +32,19 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Install test dependencies
-        run: python -m pip install --upgrade pip numpy pandas PyYAML
+        run: python -m pip install numpy==2.4.3 pandas==3.0.1 PyYAML==6.0.3
 
       - name: Compile RVE Python modules
         run: python -m compileall -q layer1 fetch
 
       - name: Run deterministic offline tests
         run: python -m unittest discover -s tests -v
+
+      - name: Run UI logic tests
+        run: node --test tests/test_ui_preview.js

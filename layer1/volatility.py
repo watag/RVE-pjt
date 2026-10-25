@@ -1,8 +1,5 @@
 import pandas as pd
 import numpy as np
-import glob
-import os
-from normalize import robust_normalize
 
 def load_price(path):
     df = pd.read_csv(path, parse_dates=["Date"])
@@ -41,35 +38,5 @@ def calc_es(df, window=120, alpha=0.05):
     return df
 
 
-def main():
-    paths = glob.glob("../data/processed/*.csv")
-
-    if not paths:
-        print("CSVが存在しません")
-        return
-
-    for path in paths:
-        df = load_price(path)
-        df = calc_log_return(df)
-        df = calc_volatility(df)
-        df = calc_es(df)
-
-      # 正規化（追加）
-        df["sigma_norm"] = robust_normalize(df["sigma"])
-        df["ES_norm"] = robust_normalize(df["ES"])
-
-
-        symbol = os.path.basename(path)
-
-        latest = df[["Date", "sigma", "ES","sigma_norm","ES_norm"]].dropna().tail(1)
-
-        if latest.empty:
-            print(f"{symbol} : データ不足（window未満）")
-        else:
-            print(symbol)
-            print(latest)
-            print("-" * 40)
-
-
-if __name__ == "__main__":
-    main()
+# Legacy calculation helpers remain importable for callers that need them.
+# The supported executable pipeline is layer1_vector.main().

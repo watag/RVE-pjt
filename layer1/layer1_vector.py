@@ -1,9 +1,84 @@
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from collections.abc import Mapping
 import pandas as pd
-import numpy as np
-import os
 from normalize import robust_normalize
 from beta import calc_all_betas, load_price, calc_log_return
 from volatility import calc_volatility, calc_es
+from risk_metrics import ANCHORS, calculate_risk_vector, calculate_risk_vector_history
+from weekly import build_weekly_returns
+from fx import convert_usd_prices_to_jpy
+from portfolio import calculate_portfolio_risk_vector, calculate_portfolio_risk_history
+
+
+def _weekly_return_inputs(asset_prices, anchor_prices):
+    if (
+        not isinstance(asset_prices, pd.DataFrame)
+        or "Date" not in asset_prices.columns
+        or "Close" not in asset_prices.columns
+    ):
+        invalid_asset = pd.Series(dtype=float, index=pd.DatetimeIndex([]))
+        return invalid_asset, pd.DataFrame(index=invalid_asset.index), pd.Series(dtype=str, index=invalid_asset.index), pd.DataFrame(index=invalid_asset.index)
+
+    weekly_asset = build_weekly_returns(asset_prices)
+    if weekly_asset.index.hasnans:
+        invalid_asset = pd.Series(dtype=float, index=pd.DatetimeIndex([]))
+        return invalid_asset, pd.DataFrame(index=invalid_asset.index), pd.Series(dtype=str, index=invalid_asset.index), pd.DataFrame(index=invalid_asset.index)
+
+    weekly_anchors = {}
+    anchor_statuses = {}
+    if isinstance(anchor_prices, Mapping):
+        for name in ANCHORS:
+            prices = anchor_prices.get(name)
+            if (
+                not isinstance(prices, pd.DataFrame)
+                or "Date" not in prices.columns
+                or "Close" not in prices.columns
+            ):
+                continue
+            weekly = build_weekly_returns(prices)
+            if not weekly.index.hasnans:
+                weekly_anchors[name] = weekly["return"]
+                anchor_statuses[name] = weekly["return_status"]
+
+    anchor_returns = pd.DataFrame(weekly_anchors)
+    return weekly_asset["return"], anchor_returns, weekly_asset["return_status"], pd.DataFrame(anchor_statuses)
+
+
+def build_risk_vector_from_daily_prices(
+    asset_prices,
+    anchor_prices,
+    iqr_thresholds=None,
+):
+    """Build the latest weekly risk vector from aligned daily prices."""
+    asset_returns, anchor_returns, asset_statuses, anchor_statuses = _weekly_return_inputs(
+        asset_prices, anchor_prices
+    )
+    return calculate_risk_vector(
+        asset_returns, anchor_returns, iqr_thresholds,
+        asset_statuses=asset_statuses,
+        anchor_statuses=anchor_statuses,
+    )
+
+
+def build_risk_vector_history_from_daily_prices(
+    asset_prices,
+    anchor_prices,
+    iqr_thresholds=None,
+    history_weeks=52,
+):
+    asset_returns, anchor_returns, asset_statuses, anchor_statuses = _weekly_return_inputs(
+        asset_prices, anchor_prices
+    )
+    return calculate_risk_vector_history(
+        asset_returns,
+        anchor_returns,
+        iqr_thresholds,
+        asset_statuses=asset_statuses,
+        anchor_statuses=anchor_statuses,
+        history_weeks=history_weeks,
+    )
 
 
 def build_volatility(df, norm_window=60, vol_window=120):
@@ -32,58 +107,199 @@ def build_beta(asset_df, factor_dict, beta_window=120, norm_window=60):
     return beta_df[cols]
 
 
-def main():
-    # ===== パラメータ =====
-    VOL_WINDOW = 120
-    BETA_WINDOW = 120
-    NORM_WINDOW = 60
+def _read_daily_prices(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame(columns=["Date", "Close"])
+    frame = pd.read_csv(path, parse_dates=["Date"])
+    if "Close" not in frame.columns:
+        return pd.DataFrame(columns=["Date", "Close"])
+    return frame[["Date", "Close"]]
 
-    # ===== パス =====
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    DATA_DIR = os.path.join(BASE_DIR, "data", "processed")
-    OUTPUT_DIR = os.path.join(BASE_DIR, "data", "layer1")
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+def _price_history_filename(symbol: str, price_field: str) -> str:
+    suffix = price_field.strip().replace(" ", "_")
+    return f"{symbol}.csv" if suffix == "Close" else f"{symbol}.{suffix}.csv"
 
-    # ===== 対象銘柄 =====
-    asset_name = "7203.T.csv"
-    asset_path = os.path.join(DATA_DIR, asset_name)
 
-    asset_df = load_price(asset_path)
+def _read_weight_history(path: Path) -> pd.DataFrame:
+    """Read weekly weights keyed by return week ending, with opening weights."""
+    frame = pd.read_csv(path)
+    if "Date" not in frame.columns:
+        raise ValueError("weight_history_missing_Date_column")
+    dates = pd.to_datetime(frame.pop("Date"), errors="coerce")
+    if dates.isna().any():
+        raise ValueError("weight_history_contains_invalid_dates")
+    if dates.duplicated().any():
+        raise ValueError("weight_history_contains_duplicate_dates")
+    frame.index = pd.DatetimeIndex(dates, name="week_ending")
+    return frame
 
-    # ===== volatility =====
-    vol_df = build_volatility(asset_df.copy(), NORM_WINDOW, VOL_WINDOW)
 
-    # ===== factor =====
-    factor_files = {
-        "gold": "1540.T.csv",
-        "topix": "1306.T.csv",
-        "sp500": "^GSPC.csv",
-        "ust": "TLT.csv",
-        "jgb": "2510.T.csv",
-        "usd_jpy": "JPY=X.csv",
+def main(data_dir=None, output_dir=None, config_path=None):
+    """Run the v1 weekly vector pipeline and write a JSON snapshot.
+
+    Legacy builder functions remain importable for existing callers, but the
+    normal executable entry point has exactly one calculation route: v1.0.
+    """
+    repository_root = Path(__file__).resolve().parents[1]
+    data_path = Path(data_dir) if data_dir is not None else repository_root / "data" / "processed"
+    result_dir = Path(output_dir) if output_dir is not None else repository_root / "data" / "layer1"
+    settings_path = Path(config_path) if config_path is not None else repository_root / "config" / "tickers.yaml"
+
+    config = fetch_config(settings_path)
+    ticker_settings = config.get("tickers", [])
+    assets = [item for item in ticker_settings if item.get("role") == "asset"]
+    if not assets:
+        assets = [item for item in ticker_settings if item.get("symbol") == "7203.T"]
+    fx_settings = [item for item in ticker_settings if item.get("role") == "fx"]
+    if not assets:
+        raise ValueError("Configuration must define at least one role: asset ticker")
+
+    asset_setting = assets[0]
+    fx_prices = (
+        _read_daily_prices(data_path / f"{fx_settings[0]['symbol']}.csv")
+        if fx_settings else pd.DataFrame(columns=["Date", "Close"])
+    )
+
+    prices_by_symbol = {}
+    for item in ticker_settings:
+        price_field = item.get("price_field", "Close")
+        prices = _read_daily_prices(
+            data_path / _price_history_filename(item["symbol"], price_field)
+        )
+        if item.get("currency") == "USD":
+            prices = convert_usd_prices_to_jpy(prices, fx_prices)
+        prices_by_symbol[item["symbol"]] = prices
+
+    asset_prices = prices_by_symbol[asset_setting["symbol"]]
+    anchor_prices = {}
+    source_metadata = {asset_setting["symbol"]: asset_setting.get("price_field", "Close")}
+    for item in ticker_settings:
+        anchor_key = item.get("anchor_key")
+        if not anchor_key:
+            continue
+        prices = prices_by_symbol[item["symbol"]]
+        source_metadata[item["symbol"]] = item.get("price_field", "Close")
+        anchor_prices[anchor_key] = prices
+
+    thresholds = config.get("normalization", {}).get("iqr_thresholds")
+    vector = build_risk_vector_from_daily_prices(asset_prices, anchor_prices, thresholds)
+    asset_history = build_risk_vector_history_from_daily_prices(
+        asset_prices, anchor_prices, thresholds, history_weeks=52
+    )
+    portfolio_result = None
+    portfolio_history = None
+    portfolio_holdings = None
+    portfolio_mode = None
+    portfolio_config = config.get("portfolio")
+    if portfolio_config is None:
+        portfolio_status = "not_configured"
+        portfolio_reason = "portfolio_configuration_is_null"
+    elif not isinstance(portfolio_config, dict):
+        portfolio_status = "configuration_error"
+        portfolio_reason = "portfolio_configuration_must_be_a_mapping_or_null"
+        portfolio_result = {"status": portfolio_status, "reason": portfolio_reason}
+    else:
+        portfolio_mode = portfolio_config.get("mode")
+        try:
+            if portfolio_mode == "scenario":
+                current_weights = portfolio_config.get("current_weights")
+                if not isinstance(current_weights, dict) or not current_weights:
+                    raise ValueError("scenario_current_weights_missing_or_invalid")
+                portfolio_symbols = set(current_weights)
+                weights = pd.Series(current_weights, dtype=float)
+            elif portfolio_mode == "realized":
+                portfolio_symbols = set(portfolio_config.get("symbols", []))
+                weights_path = portfolio_config.get("weights_file")
+                if not portfolio_symbols:
+                    raise ValueError("realized_symbols_missing")
+                if not weights_path:
+                    raise ValueError("realized_weights_file_missing")
+                weights = _read_weight_history(data_path / weights_path)
+            else:
+                raise ValueError("unsupported_portfolio_mode")
+
+            portfolio_series = {}
+            for item in ticker_settings:
+                if item["symbol"] not in portfolio_symbols:
+                    continue
+                weekly = build_weekly_returns(prices_by_symbol[item["symbol"]])
+                portfolio_series[item["symbol"]] = weekly["return"]
+            portfolio_returns = pd.DataFrame(portfolio_series)
+            if portfolio_returns.empty:
+                raise ValueError("portfolio_has_no_configured_asset_price_series")
+
+            anchor_weekly = {
+                name: build_weekly_returns(prices)
+                for name, prices in anchor_prices.items()
+            }
+            anchor_series = {name: weekly["return"] for name, weekly in anchor_weekly.items()}
+            anchor_status_series = {
+                name: weekly["return_status"] for name, weekly in anchor_weekly.items()
+            }
+            portfolio_anchors = pd.DataFrame(anchor_series)
+            portfolio_anchor_statuses = pd.DataFrame(anchor_status_series)
+            if portfolio_mode == "scenario":
+                holdings_date = None
+                holdings = weights
+            else:
+                aligned_weights = weights.reindex(portfolio_returns.index)
+                available_weights = aligned_weights.dropna(how="all")
+                if available_weights.empty:
+                    holdings_date = None
+                    holdings = pd.Series(dtype=float)
+                else:
+                    holdings_date = available_weights.index[-1].isoformat()
+                    holdings = available_weights.iloc[-1].dropna()
+            portfolio_holdings = {
+                "as_of": holdings_date,
+                "weights": {str(symbol): float(value) for symbol, value in holdings.items()},
+            }
+            portfolio_result = calculate_portfolio_risk_vector(
+                portfolio_returns, weights, portfolio_anchors, thresholds,
+                mode=portfolio_mode, anchor_statuses=portfolio_anchor_statuses,
+            )
+            portfolio_history = calculate_portfolio_risk_history(
+                portfolio_returns, weights, portfolio_anchors, thresholds,
+                mode=portfolio_mode, history_weeks=52,
+                anchor_statuses=portfolio_anchor_statuses,
+            )
+        except (OSError, TypeError, ValueError, KeyError) as error:
+            portfolio_result = {
+                "analysis_mode": portfolio_mode,
+                "status": "configuration_error",
+                "reason": str(error),
+            }
+        portfolio_status = portfolio_result.get(
+            "portfolio_status", portfolio_result.get("status", "calculation_error")
+        )
+        portfolio_reason = portfolio_result.get("reason")
+    result = {
+        "asset_symbol": asset_setting["symbol"],
+        "analysis_currency": "JPY",
+        "price_fields": source_metadata,
+        "fx_alignment": "exact_calendar_date_no_fill",
+        "asset": vector,
+        "asset_history": asset_history,
+        "portfolio": portfolio_result,
+        "portfolio_history": portfolio_history,
+        "portfolio_holdings": portfolio_holdings,
+        "portfolio_status": portfolio_status,
+        "portfolio_reason": portfolio_reason,
+        "portfolio_mode": portfolio_mode,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+    result_dir.mkdir(parents=True, exist_ok=True)
+    output_path = result_dir / f"{asset_setting['symbol']}_risk_vector.json"
+    output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Saved: {output_path}")
+    print(json.dumps(vector, ensure_ascii=False))
 
-    factors = {}
-    for name, filename in factor_files.items():
-        path = os.path.join(DATA_DIR, filename)
-        df = load_price(path)
-        df = calc_log_return(df)
-        factors[name] = df
 
-    # ===== beta =====
-    asset_return_df = calc_log_return(asset_df.copy())
-    beta_df = build_beta(asset_return_df, factors, BETA_WINDOW, NORM_WINDOW)
-
-    # ===== merge =====
-    layer1 = vol_df.merge(beta_df, on="Date", how="inner")
-
-    # ===== 出力 =====
-    output_path = os.path.join(OUTPUT_DIR, asset_name.replace(".csv", "_layer1.csv"))
-    layer1.to_csv(output_path, index=False)
-
-    print("Saved:", output_path)
-    print(layer1.tail())
+def fetch_config(path):
+    import yaml
+    with Path(path).open("r", encoding="utf-8") as config_file:
+        return yaml.safe_load(config_file)
 
 
 if __name__ == "__main__":

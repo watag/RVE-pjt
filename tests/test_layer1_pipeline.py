@@ -14,7 +14,7 @@ LAYER1_DIR = Path(__file__).resolve().parents[1] / "layer1"
 sys.path.insert(0, str(LAYER1_DIR))
 
 from layer1_vector import build_risk_vector_from_daily_prices  # noqa: E402
-from layer1_vector import main as run_layer1_main  # noqa: E402
+from layer1_vector import main as run_layer1_main, _read_weight_history  # noqa: E402
 from risk_metrics import ANCHORS  # noqa: E402
 
 
@@ -24,6 +24,52 @@ def prices_from_returns(dates, returns):
 
 
 class Layer1PipelineTests(unittest.TestCase):
+    def test_weight_history_requires_unique_valid_date_column(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "weights.csv"
+            path.write_text("Date,7203.T\nnot-a-date,1.0\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "invalid_dates"):
+                _read_weight_history(path)
+
+            path.write_text(
+                "Date,7203.T\n2025-01-03,1.0\n2025-01-03,1.0\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "duplicate_dates"):
+                _read_weight_history(path)
+
+    def test_main_distinguishes_unconfigured_portfolio_from_failure(self):
+        import yaml
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_dir = root / "processed"
+            data_dir.mkdir()
+            output_dir = root / "layer1"
+            config_path = root / "tickers.yaml"
+            config_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "tickers": [
+                            {"symbol": "7203.T", "currency": "JPY", "role": "asset"}
+                        ],
+                        "normalization": {"iqr_thresholds": {}},
+                        "portfolio": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            run_layer1_main(data_dir, output_dir, config_path)
+            payload = json.loads(
+                (output_dir / "7203.T_risk_vector.json").read_text(encoding="utf-8")
+            )
+
+        self.assertIsNone(payload["portfolio"])
+        self.assertEqual(payload["portfolio_status"], "not_configured")
+        self.assertEqual(payload["portfolio_reason"], "portfolio_configuration_is_null")
+        self.assertIn("generated_at", payload)
+
     def test_daily_prices_produce_specification_based_weekly_vector(self):
         count = 220
         dates = pd.date_range("2021-01-01", periods=count + 1, freq="W-FRI")
@@ -130,7 +176,17 @@ class Layer1PipelineTests(unittest.TestCase):
                 yaml.safe_dump(
                     {
                         "tickers": tickers,
-                        "normalization": {"iqr_thresholds": {}},
+                        "normalization": {
+                            "iqr_thresholds": {
+                                "sigma": 0.0,
+                                "ES": 0.0,
+                                "beta_gold": 0.0,
+                                "beta_us_equity": 0.0,
+                                "beta_japan_equity": 0.0,
+                                "beta_us_treasury": 0.0,
+                                "beta_japan_bond": 0.0,
+                            }
+                        },
                         "portfolio": {
                             "mode": "scenario",
                             "current_weights": {"7203.T": 1.0},
@@ -149,6 +205,11 @@ class Layer1PipelineTests(unittest.TestCase):
         self.assertEqual(payload["fx_alignment"], "exact_calendar_date_no_fill")
         self.assertEqual(payload["portfolio_mode"], "scenario")
         self.assertEqual(payload["portfolio"]["analysis_mode"], "scenario")
+        self.assertIn("generated_at", payload)
+        self.assertTrue(
+            all(item["normalization_status"] == "ok" for item in payload["asset"].values()
+                if isinstance(item, dict))
+        )
         self.assertAlmostEqual(
             payload["portfolio"]["sigma"]["value"], payload["asset"]["sigma"]["value"]
         )

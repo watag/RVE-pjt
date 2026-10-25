@@ -39,6 +39,7 @@ class PortfolioReturnTests(unittest.TestCase):
 
         self.assertTrue(np.isnan(result.loc[dates[0], "portfolio_return"]))
         self.assertEqual(result.loc[dates[0], "status"], "missing_price")
+        self.assertEqual(result.loc[dates[0], "reason"], "missing_held_asset_return:b")
 
     def test_zero_weight_missing_return_does_not_invalidate_week(self):
         dates = pd.date_range("2025-01-03", periods=1, freq="W-FRI")
@@ -59,6 +60,7 @@ class PortfolioReturnTests(unittest.TestCase):
 
         self.assertTrue(np.isnan(result.loc[dates[0], "portfolio_return"]))
         self.assertEqual(result.loc[dates[0], "status"], "configuration_error")
+        self.assertIn("weight_sum_not_one", result.loc[dates[0], "reason"])
 
     def test_missing_weekly_weights_are_not_carried_forward(self):
         dates = pd.date_range("2025-01-03", periods=2, freq="W-FRI")
@@ -69,6 +71,30 @@ class PortfolioReturnTests(unittest.TestCase):
 
         self.assertEqual(result.loc[dates[0], "status"], "ok")
         self.assertEqual(result.loc[dates[1], "status"], "configuration_error")
+        self.assertEqual(result.loc[dates[1], "reason"], "missing_weekly_weight_row")
+
+    def test_weight_symbol_mismatch_has_a_specific_reason(self):
+        dates = pd.date_range("2025-01-03", periods=1, freq="W-FRI")
+        returns = pd.DataFrame({"a": [0.04], "b": [0.02]}, index=dates)
+        weights = pd.DataFrame({"a": [1.0]}, index=dates)
+
+        result = calculate_portfolio_returns(returns, weights)
+
+        self.assertEqual(result.loc[dates[0], "status"], "configuration_error")
+        self.assertEqual(result.loc[dates[0], "reason"], "weight_symbols_mismatch")
+
+    def test_v1_rejects_negative_weights_even_when_the_net_sum_is_one(self):
+        dates = pd.date_range("2025-01-03", periods=1, freq="W-FRI")
+        returns = pd.DataFrame({"long": [0.04], "short": [0.02]}, index=dates)
+        weights = pd.DataFrame({"long": [1.2], "short": [-0.2]}, index=dates)
+
+        result = calculate_portfolio_returns(returns, weights)
+
+        self.assertTrue(np.isnan(result.loc[dates[0], "portfolio_return"]))
+        self.assertEqual(result.loc[dates[0], "status"], "configuration_error")
+        self.assertEqual(
+            result.loc[dates[0], "reason"], "negative_weights_not_supported:short"
+        )
 
     def test_portfolio_returns_feed_the_existing_risk_vector_calculator(self):
         count = 220
@@ -128,6 +154,7 @@ class PortfolioReturnTests(unittest.TestCase):
 
         self.assertEqual(result["analysis_mode"], "scenario")
         self.assertEqual(result["portfolio_status"], "ok")
+        self.assertEqual(result["portfolio_diagnostics"]["invalid_weeks"], 0)
         self.assertAlmostEqual(
             result["sigma"]["value"], np.std(expected_returns.iloc[-52:], ddof=1) * np.sqrt(52)
         )

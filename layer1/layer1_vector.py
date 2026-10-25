@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Mapping
 import pandas as pd
@@ -101,6 +102,20 @@ def _price_history_filename(symbol: str, price_field: str) -> str:
     return f"{symbol}.csv" if suffix == "Close" else f"{symbol}.{suffix}.csv"
 
 
+def _read_weight_history(path: Path) -> pd.DataFrame:
+    """Read weekly weights keyed by return week ending, with opening weights."""
+    frame = pd.read_csv(path)
+    if "Date" not in frame.columns:
+        raise ValueError("weight_history_missing_Date_column")
+    dates = pd.to_datetime(frame.pop("Date"), errors="coerce")
+    if dates.isna().any():
+        raise ValueError("weight_history_contains_invalid_dates")
+    if dates.duplicated().any():
+        raise ValueError("weight_history_contains_duplicate_dates")
+    frame.index = pd.DatetimeIndex(dates, name="week_ending")
+    return frame
+
+
 def main(data_dir=None, output_dir=None, config_path=None):
     """Run the v1 weekly vector pipeline and write a JSON snapshot.
 
@@ -153,29 +168,43 @@ def main(data_dir=None, output_dir=None, config_path=None):
     portfolio_result = None
     portfolio_mode = None
     portfolio_config = config.get("portfolio")
-    if isinstance(portfolio_config, dict):
+    if portfolio_config is None:
+        portfolio_status = "not_configured"
+        portfolio_reason = "portfolio_configuration_is_null"
+    elif not isinstance(portfolio_config, dict):
+        portfolio_status = "configuration_error"
+        portfolio_reason = "portfolio_configuration_must_be_a_mapping_or_null"
+        portfolio_result = {"status": portfolio_status, "reason": portfolio_reason}
+    else:
         portfolio_mode = portfolio_config.get("mode")
-        portfolio_symbols = set(
-            portfolio_config.get("current_weights", {}).keys()
-            if portfolio_mode == "scenario"
-            else portfolio_config.get("symbols", [])
-        )
-        portfolio_series = {}
-        for item in ticker_settings:
-            if item["symbol"] not in portfolio_symbols:
-                continue
-            weekly = build_weekly_returns(prices_by_symbol[item["symbol"]])
-            portfolio_series[item["symbol"]] = weekly["return"]
-        portfolio_returns = pd.DataFrame(portfolio_series)
-        if portfolio_mode == "scenario":
-            weights = pd.Series(portfolio_config.get("current_weights", {}), dtype=float)
-        elif portfolio_mode == "realized" and portfolio_config.get("weights_file"):
-            weights = pd.read_csv(
-                data_path / portfolio_config["weights_file"], parse_dates=["Date"]
-            ).set_index("Date")
-        else:
-            weights = None
-        if weights is not None and not portfolio_returns.empty:
+        try:
+            if portfolio_mode == "scenario":
+                current_weights = portfolio_config.get("current_weights")
+                if not isinstance(current_weights, dict) or not current_weights:
+                    raise ValueError("scenario_current_weights_missing_or_invalid")
+                portfolio_symbols = set(current_weights)
+                weights = pd.Series(current_weights, dtype=float)
+            elif portfolio_mode == "realized":
+                portfolio_symbols = set(portfolio_config.get("symbols", []))
+                weights_path = portfolio_config.get("weights_file")
+                if not portfolio_symbols:
+                    raise ValueError("realized_symbols_missing")
+                if not weights_path:
+                    raise ValueError("realized_weights_file_missing")
+                weights = _read_weight_history(data_path / weights_path)
+            else:
+                raise ValueError("unsupported_portfolio_mode")
+
+            portfolio_series = {}
+            for item in ticker_settings:
+                if item["symbol"] not in portfolio_symbols:
+                    continue
+                weekly = build_weekly_returns(prices_by_symbol[item["symbol"]])
+                portfolio_series[item["symbol"]] = weekly["return"]
+            portfolio_returns = pd.DataFrame(portfolio_series)
+            if portfolio_returns.empty:
+                raise ValueError("portfolio_has_no_configured_asset_price_series")
+
             anchor_series = {
                 name: build_weekly_returns(prices)["return"]
                 for name, prices in anchor_prices.items()
@@ -185,11 +214,16 @@ def main(data_dir=None, output_dir=None, config_path=None):
                 portfolio_returns, weights, portfolio_anchors, thresholds,
                 mode=portfolio_mode,
             )
-        else:
+        except (OSError, TypeError, ValueError, KeyError) as error:
             portfolio_result = {
                 "analysis_mode": portfolio_mode,
                 "status": "configuration_error",
+                "reason": str(error),
             }
+        portfolio_status = portfolio_result.get(
+            "portfolio_status", portfolio_result.get("status", "calculation_error")
+        )
+        portfolio_reason = portfolio_result.get("reason")
     result = {
         "asset_symbol": asset_setting["symbol"],
         "analysis_currency": "JPY",
@@ -197,11 +231,10 @@ def main(data_dir=None, output_dir=None, config_path=None):
         "fx_alignment": "exact_calendar_date_no_fill",
         "asset": vector,
         "portfolio": portfolio_result,
-        "portfolio_status": (
-            portfolio_result.get("portfolio_status", portfolio_result.get("status"))
-            if portfolio_result is not None else "configuration_error"
-        ),
+        "portfolio_status": portfolio_status,
+        "portfolio_reason": portfolio_reason,
         "portfolio_mode": portfolio_mode,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
     result_dir.mkdir(parents=True, exist_ok=True)
     output_path = result_dir / f"{asset_setting['symbol']}_risk_vector.json"

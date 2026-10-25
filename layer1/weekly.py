@@ -54,8 +54,13 @@ def build_weekly_returns(
         return _configuration_error()
 
     dates = pd.to_datetime(daily_prices[date_column], errors="coerce")
-    if dates.isna().any() or getattr(dates.dt, "tz", None) is not None:
+    if dates.isna().any():
         return _configuration_error()
+    # Treat timezone-aware daily timestamps as source-local session dates.
+    # Converting them to UTC first can move midnight bars into the prior day.
+    if getattr(dates.dt, "tz", None) is not None:
+        dates = dates.dt.tz_localize(None)
+    dates = dates.dt.normalize()
     if dates.duplicated().any():
         return _configuration_error()
 

@@ -6,6 +6,16 @@ import numpy as np
 import pandas as pd
 
 
+def _session_dates(values: pd.Series) -> pd.Series:
+    """Use each daily bar's source-local calendar date as its session key."""
+    dates = pd.to_datetime(values, errors="coerce")
+    if dates.isna().any():
+        return dates
+    if getattr(dates.dt, "tz", None) is not None:
+        dates = dates.dt.tz_localize(None)
+    return dates.dt.normalize()
+
+
 def convert_usd_prices_to_jpy(
     usd_prices: pd.DataFrame,
     usd_jpy: pd.DataFrame,
@@ -28,12 +38,9 @@ def convert_usd_prices_to_jpy(
     ):
         return pd.DataFrame(columns=[date_column, price_column, "price_status"])
 
-    asset_dates = pd.to_datetime(usd_prices[date_column], errors="coerce")
-    if not asset_dates.isna().any() and getattr(asset_dates.dt, "tz", None) is None:
-        asset_dates = asset_dates.dt.normalize()
+    asset_dates = _session_dates(usd_prices[date_column])
     if (
         asset_dates.isna().any()
-        or getattr(asset_dates.dt, "tz", None) is not None
         or asset_dates.duplicated().any()
     ):
         return pd.DataFrame(columns=[date_column, price_column, "price_status"])
@@ -52,12 +59,9 @@ def convert_usd_prices_to_jpy(
             }
         )
 
-    fx_dates = pd.to_datetime(usd_jpy[date_column], errors="coerce")
-    if not fx_dates.isna().any() and getattr(fx_dates.dt, "tz", None) is None:
-        fx_dates = fx_dates.dt.normalize()
+    fx_dates = _session_dates(usd_jpy[date_column])
     if (
         fx_dates.isna().any()
-        or getattr(fx_dates.dt, "tz", None) is not None
         or fx_dates.duplicated().any()
     ):
         return pd.DataFrame(columns=[date_column, price_column, "price_status"])

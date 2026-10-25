@@ -44,6 +44,41 @@ def thresholds(value=0.0):
 
 
 class WeeklyRiskVectorTests(unittest.TestCase):
+    def test_es_preserves_signed_mean_for_profit_only_and_loss_only_tails(self):
+        dates = pd.date_range("2022-01-07", periods=156, freq="W-FRI")
+        cases = (
+            (np.linspace(0.001, 0.02, 156), "profit_only"),
+            (np.linspace(-0.001, -0.02, 156), "loss_only"),
+            (np.linspace(-0.02, 0.02, 156), "mixed"),
+        )
+
+        for returns, label in cases:
+            with self.subTest(label=label):
+                asset = pd.Series(returns, index=dates)
+                result = calculate_risk_vector(asset, pd.DataFrame(index=dates))
+
+                expected = np.sort(-returns)[-8:].mean()
+                self.assertAlmostEqual(result["ES"]["value"], expected)
+                self.assertEqual(result["ES"]["status"], "ok")
+                if label == "profit_only":
+                    self.assertLess(result["ES"]["value"], 0.0)
+                else:
+                    self.assertGreater(result["ES"]["value"], 0.0)
+
+    def test_missing_return_in_es_window_does_not_become_zero(self):
+        dates = pd.date_range("2022-01-07", periods=156, freq="W-FRI")
+        returns = pd.Series(np.linspace(-0.02, 0.02, 156), index=dates)
+        returns.iloc[-1] = np.nan
+        statuses = pd.Series("ok", index=dates)
+        statuses.iloc[-1] = "missing_price"
+
+        result = calculate_risk_vector(
+            returns, pd.DataFrame(index=dates), asset_statuses=statuses
+        )
+
+        self.assertIsNone(result["ES"]["value"])
+        self.assertEqual(result["ES"]["status"], "missing_price")
+
     def test_calculates_annualized_sigma_es_and_five_anchor_betas(self):
         asset, anchors = make_weekly_returns()
 

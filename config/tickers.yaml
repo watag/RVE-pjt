@@ -44,15 +44,16 @@ tickers:
     role: fx
 
 normalization:
-  # Threshold values remain null until calibrated against representative histories.
+  # Thresholds are q05 floors of positive historical IQRs; see
+  # reports/rve-v1.0-iqr-calibration.md for source, period, units, and method.
   iqr_thresholds:
-    sigma: null
-    ES: null
-    beta_gold: null
-    beta_us_equity: null
-    beta_japan_equity: null
-    beta_us_treasury: null
-    beta_japan_bond: null
+    sigma: 0.0024348584456083725
+    ES: 0.0003297047452374517
+    beta_gold: 0.010262296851308451
+    beta_us_equity: 0.016443156549517023
+    beta_japan_equity: 0.019550831087507322
+    beta_us_treasury: 0.021453844888890378
+    beta_japan_bond: 0.20850612100366078
 
 # No holdings history/current weights are included in this source snapshot.
 portfolio: null

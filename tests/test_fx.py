@@ -41,6 +41,32 @@ class FxConversionTests(unittest.TestCase):
         self.assertEqual(result.loc[0, "Close"], 15000.0)
         self.assertEqual(result.loc[0, "price_status"], "ok")
 
+    def test_source_local_dates_match_across_timezone_aware_inputs(self):
+        usd = pd.DataFrame(
+            {
+                "Date": pd.to_datetime(
+                    ["2025-01-03 16:00", "2025-01-10 16:00"]
+                ).tz_localize("America/New_York"),
+                "Close": [100.0, 110.0],
+            }
+        )
+        fx = pd.DataFrame(
+            {
+                "Date": pd.to_datetime(
+                    ["2025-01-03 00:00", "2025-01-10 00:00"]
+                ).tz_localize("UTC"),
+                "Close": [150.0, 155.0],
+            }
+        )
+
+        converted = convert_usd_prices_to_jpy(usd, fx)
+        weekly = build_weekly_returns(converted)
+
+        self.assertEqual(converted["Date"].tolist(), list(pd.to_datetime(["2025-01-03", "2025-01-10"])))
+        self.assertEqual(converted["Close"].tolist(), [15000.0, 17050.0])
+        self.assertAlmostEqual(weekly.iloc[-1]["return"], 17050.0 / 15000.0 - 1.0)
+        self.assertEqual(weekly.iloc[-1]["return_status"], "ok")
+
     def test_missing_fx_is_not_filled_and_remains_distinct(self):
         dates = pd.to_datetime(["2025-01-03", "2025-01-10"])
         usd = pd.DataFrame({"Date": dates, "Close": [100.0, 110.0]})

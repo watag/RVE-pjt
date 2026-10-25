@@ -165,6 +165,37 @@ class IncrementalFetchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid dates"):
             merge_price_history(invalid, pd.DataFrame(columns=["Date", "Close"]))
 
+    def test_missing_nonfinite_and_nonpositive_prices_are_rejected(self):
+        for value in (None, float("nan"), float("inf"), 0.0, -1.0):
+            with self.subTest(value=value):
+                invalid = pd.DataFrame(
+                    {"Date": pd.to_datetime(["2025-01-03"]), "Close": [value]}
+                )
+                with self.assertRaisesRegex(ValueError, "prices"):
+                    merge_price_history(invalid, pd.DataFrame(columns=["Date", "Close"]))
+
+    def test_invalid_download_does_not_rewrite_existing_history(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "7203.T.csv"
+            pd.DataFrame(
+                {"Date": pd.to_datetime(["2020-01-03"]), "Close": [80.0]}
+            ).to_csv(path, index=False)
+            before = path.read_bytes()
+
+            def invalid_downloader(symbol, **kwargs):
+                return pd.DataFrame(
+                    {"Close": [0.0]},
+                    index=pd.DatetimeIndex(["2026-10-20"], name="Date"),
+                )
+
+            with self.assertRaisesRegex(ValueError, "non-positive prices"):
+                fetch_and_save(
+                    "7203.T", output_dir=temp_dir,
+                    downloader=invalid_downloader, as_of="2026-10-24",
+                )
+
+            self.assertEqual(path.read_bytes(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

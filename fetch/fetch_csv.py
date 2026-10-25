@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 
 
 MIN_NORMALIZED_ES_RETURN_WEEKS = 208
@@ -61,7 +62,14 @@ def _as_daily_frame(
         if date_column is None:
             raise ValueError(f"Downloaded data for {symbol} has no date index")
         frame = frame.rename(columns={date_column: "Date"})
-    return frame[["Date", "Close"]]
+    frame = frame[["Date", "Close"]].copy()
+    frame["Close"] = pd.to_numeric(frame["Close"], errors="coerce")
+    values = frame["Close"].to_numpy(dtype=float)
+    if not np.isfinite(values).all() or (values <= 0).any():
+        raise ValueError(
+            f"Downloaded data for {symbol} contains missing, non-finite, or non-positive prices"
+        )
+    return frame
 
 
 def merge_price_history(
@@ -81,6 +89,9 @@ def merge_price_history(
             raise ValueError("Price history contains invalid dates")
         if normalized["Date"].duplicated().any():
             raise ValueError("Price history contains duplicate dates")
+        values = normalized["Close"].to_numpy(dtype=float)
+        if not np.isfinite(values).all() or (values <= 0).any():
+            raise ValueError("Price history contains missing, non-finite, or non-positive prices")
         frames.append(normalized)
 
     if not frames:

@@ -1,45 +1,30 @@
-Latest run after PR #6 update: 2026-10-25
-Command: PYTHONPYCACHEPREFIX=/tmp/rve-v1-audit-pycache /tmp/rve-layer1-ubuntu-venv/bin/python -m unittest discover -s tests -v
-Environment: Python 3.12.3, NumPy 2.5.4, pandas 3.0.6, PyYAML 6.0.3
-Result: 59 tests in 6.068s, OK (59 passed, 0 failed, 0 errors).
-The test output below is the prior snapshot's 34-test run; it is retained as historical evidence, not the latest result.
+RVE v1.0 re-audit verification log
+Date: 2026-10-25 UTC
+Worktree: /tmp/rve-v1.0-audit
+Branch: agent/rve-v1.0-audit
+Base HEAD: 7fd22b2a77d37dcdd02064cea2f911635d4432e2
 
-test_fetch_saves_delta_without_dropping_older_rows (test_fetch_csv.IncrementalFetchTests.test_fetch_saves_delta_without_dropping_older_rows) ... ok
-test_first_fetch_backfills_five_year_warmup (test_fetch_csv.IncrementalFetchTests.test_first_fetch_backfills_five_year_warmup) ... ok
-test_mature_history_updates_from_recent_overlap (test_fetch_csv.IncrementalFetchTests.test_mature_history_updates_from_recent_overlap) ... ok
-test_merge_preserves_history_and_replaces_overlapping_dates (test_fetch_csv.IncrementalFetchTests.test_merge_preserves_history_and_replaces_overlapping_dates) ... ok
-test_short_existing_history_triggers_backfill (test_fetch_csv.IncrementalFetchTests.test_short_existing_history_triggers_backfill) ... ok
-test_beta_forward_and_backward_fills_missing_factor_returns (test_layer1.Layer1CalculationTests.test_beta_forward_and_backward_fills_missing_factor_returns) ... ok
-test_beta_uses_date_join_and_preserves_legacy_covariance_variance_ratio (test_layer1.Layer1CalculationTests.test_beta_uses_date_join_and_preserves_legacy_covariance_variance_ratio) ... ok
-test_es_uses_prior_window_and_signed_lower_tail_mean (test_layer1.Layer1CalculationTests.test_es_uses_prior_window_and_signed_lower_tail_mean) ... ok
-test_layer1_builders_return_expected_normalized_columns (test_layer1.Layer1CalculationTests.test_layer1_builders_return_expected_normalized_columns) ... ok
-test_load_price_sorts_dates_before_calc_log_return (test_layer1.Layer1CalculationTests.test_load_price_sorts_dates_before_calc_log_return) ... ok
-test_robust_normalize_returns_nan_for_zero_iqr (test_layer1.Layer1CalculationTests.test_robust_normalize_returns_nan_for_zero_iqr) ... ok
-test_robust_normalize_uses_rolling_median_and_iqr (test_layer1.Layer1CalculationTests.test_robust_normalize_uses_rolling_median_and_iqr) ... ok
-test_volatility_uses_rolling_sample_standard_deviation (test_layer1.Layer1CalculationTests.test_volatility_uses_rolling_sample_standard_deviation) ... ok
-test_daily_prices_produce_specification_based_weekly_vector (test_layer1_pipeline.Layer1PipelineTests.test_daily_prices_produce_specification_based_weekly_vector) ... ok
-test_missing_anchor_keeps_other_daily_price_metrics_available (test_layer1_pipeline.Layer1PipelineTests.test_missing_anchor_keeps_other_daily_price_metrics_available) ... ok
-test_does_not_renormalize_when_a_held_asset_return_is_missing (test_portfolio.PortfolioReturnTests.test_does_not_renormalize_when_a_held_asset_return_is_missing) ... ok
-test_missing_weekly_weights_are_not_carried_forward (test_portfolio.PortfolioReturnTests.test_missing_weekly_weights_are_not_carried_forward) ... ok
-test_portfolio_returns_feed_the_existing_risk_vector_calculator (test_portfolio.PortfolioReturnTests.test_portfolio_returns_feed_the_existing_risk_vector_calculator) ... ok
-test_rejects_weights_that_do_not_sum_to_one (test_portfolio.PortfolioReturnTests.test_rejects_weights_that_do_not_sum_to_one) ... ok
-test_uses_each_weeks_beginning_weights (test_portfolio.PortfolioReturnTests.test_uses_each_weeks_beginning_weights) ... ok
-test_zero_weight_missing_return_does_not_invalidate_week (test_portfolio.PortfolioReturnTests.test_zero_weight_missing_return_does_not_invalidate_week) ... ok
-test_calculates_annualized_sigma_es_and_five_anchor_betas (test_risk_metrics.WeeklyRiskVectorTests.test_calculates_annualized_sigma_es_and_five_anchor_betas) ... ok
-test_iqr_threshold_equality_and_missing_configuration (test_risk_metrics.WeeklyRiskVectorTests.test_iqr_threshold_equality_and_missing_configuration) ... ok
-test_malformed_anchor_dates_do_not_hide_asset_only_metrics (test_risk_metrics.WeeklyRiskVectorTests.test_malformed_anchor_dates_do_not_hide_asset_only_metrics) ... ok
-test_missing_anchor_configuration_does_not_hide_other_metrics (test_risk_metrics.WeeklyRiskVectorTests.test_missing_anchor_configuration_does_not_hide_other_metrics) ... ok
-test_missing_week_is_not_filled_with_zero (test_risk_metrics.WeeklyRiskVectorTests.test_missing_week_is_not_filled_with_zero) ... ok
-test_normalization_uses_previous_52_metric_values (test_risk_metrics.WeeklyRiskVectorTests.test_normalization_uses_previous_52_metric_values) ... ok
-test_reports_insufficient_history_at_metric_boundaries (test_risk_metrics.WeeklyRiskVectorTests.test_reports_insufficient_history_at_metric_boundaries) ... ok
-test_zero_variance_anchor_has_its_own_status (test_risk_metrics.WeeklyRiskVectorTests.test_zero_variance_anchor_has_its_own_status) ... ok
-test_duplicate_daily_date_is_configuration_error (test_weekly.WeeklyPricePreparationTests.test_duplicate_daily_date_is_configuration_error) ... ok
-test_missing_close_on_final_observation_is_not_skipped (test_weekly.WeeklyPricePreparationTests.test_missing_close_on_final_observation_is_not_skipped) ... ok
-test_missing_week_is_explicit_and_does_not_bridge_returns (test_weekly.WeeklyPricePreparationTests.test_missing_week_is_explicit_and_does_not_bridge_returns) ... ok
-test_nonpositive_final_weekly_price_is_invalid_without_earlier_fallback (test_weekly.WeeklyPricePreparationTests.test_nonpositive_final_weekly_price_is_invalid_without_earlier_fallback) ... ok
-test_uses_last_observation_when_friday_is_a_market_holiday (test_weekly.WeeklyPricePreparationTests.test_uses_last_observation_when_friday_is_a_market_holiday) ... ok
+Latest local validation (after the current PR worktree code changes):
+- Python: Python 3.12; NumPy 2.4.3; pandas 3.0.1; PyYAML 6.0.3
+- Command: PYTHONPYCACHEPREFIX=/tmp/rve-v1-pycache /tmp/rve-layer1-ubuntu-venv/bin/python -m unittest discover -s tests -v
+- Result: 72 tests, 72 passed, 0 failures/errors.
+- Command: python -m compileall -q layer1 fetch scripts tests
+- Result: passed.
+- Node: v18.19.1 (CI workflow uses Node 22)
+- Command: node --test tests/test_ui_preview.js
+- Result: 7 tests passed, 0 failures.
+- Command: node --check reports/risk-vector-preview.js
+- Result: passed.
+- Command: git diff --check
+- Result: passed.
 
-----------------------------------------------------------------------
-Ran 34 tests in 3.133s
+Live data:
+- `fetch_and_save` completed an initial download and a second incremental update for all seven configured series using Yahoo Finance/yfinance into /tmp/rve-fetcher-live-check. Row counts and oldest dates were preserved across the second update (2021-11-01 through 2026-10-23); repository data files were not touched.
+- `main()` completed using the separate five-year real-data snapshot in /tmp/rve-v1-calibration and produced seven raw and seven normalized `ok` statuses for 7203.T as of 2026-10-23. Portfolio status was not_configured.
+- Browser validation attempted with Playwright Chromium. Browser could not start because `libnspr4.so` is absent. No system package was installed. No screenshot or Pages validation is claimed.
 
-OK
+GitHub Actions:
+- No CI result exists for the current uncommitted worktree. Previously reported success belongs to an older commit and is not evidence for this revision.
+- No commit, push, or merge was performed in this worktree.
+
+Historical test log below this header was removed because it referred to superseded snapshots and could be mistaken for current evidence. See reports/rve-v1.0-reaudit.md for scope and remaining limits.

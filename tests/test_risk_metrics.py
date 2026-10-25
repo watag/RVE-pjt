@@ -92,6 +92,10 @@ class WeeklyRiskVectorTests(unittest.TestCase):
         self.assertAlmostEqual(
             result["ES"]["value"], np.sort(latest_losses)[-8:].mean()
         )
+        self.assertEqual(result["sigma"]["window_weeks"], 52)
+        self.assertEqual(result["sigma"]["observation_count"], 52)
+        self.assertEqual(result["ES"]["window_weeks"], 156)
+        self.assertEqual(result["ES"]["observation_count"], 156)
         self.assertEqual(
             [name for name in result if name.startswith("beta_")],
             [f"beta_{name}" for name in ANCHORS],
@@ -104,6 +108,8 @@ class WeeklyRiskVectorTests(unittest.TestCase):
             )[0, 1] / np.var(anchors[anchor_name].to_numpy()[-52:], ddof=1)
             self.assertAlmostEqual(result[f"beta_{anchor_name}"]["value"], expected)
             self.assertEqual(result[f"beta_{anchor_name}"]["status"], "ok")
+            self.assertEqual(result[f"beta_{anchor_name}"]["window_weeks"], 52)
+            self.assertEqual(result[f"beta_{anchor_name}"]["observation_count"], 52)
 
     def test_reports_insufficient_history_at_metric_boundaries(self):
         asset_51, anchors_51 = make_weekly_returns(51)
@@ -124,8 +130,11 @@ class WeeklyRiskVectorTests(unittest.TestCase):
         result = calculate_risk_vector(asset, anchors, thresholds())
 
         self.assertEqual(result["sigma"]["status"], "missing_price")
+        self.assertEqual(result["sigma"]["observation_count"], 51)
         self.assertEqual(result["ES"]["status"], "missing_price")
+        self.assertEqual(result["ES"]["observation_count"], 155)
         self.assertEqual(result["beta_gold"]["status"], "missing_price")
+        self.assertEqual(result["beta_gold"]["observation_count"], 51)
 
     def test_missing_fx_status_is_not_collapsed_into_missing_price(self):
         asset, anchors = make_weekly_returns()

@@ -30,14 +30,39 @@ def _record(value: float | None, status: str, normalized: float | None = None,
         "status": status,
         "normalized": normalized,
         "normalization_status": normalization_status or status,
+        "window_weeks": None,
+        "observation_count": 0,
     }
+
+
+def _window_for(metric: str) -> int:
+    if metric == "sigma":
+        return SIGMA_WINDOW
+    if metric == "ES":
+        return ES_WINDOW
+    return BETA_WINDOW
 
 
 def _empty_vector(status: str) -> dict[str, Any]:
-    return {
-        name: _record(None, status, normalization_status=status)
-        for name in METRICS
-    }
+    result = {}
+    for name in METRICS:
+        item = _record(None, status, normalization_status=status)
+        item["window_weeks"] = _window_for(name)
+        result[name] = item
+    return result
+
+
+def _observation_count(frame: pd.DataFrame, metric: str, end: int) -> int:
+    """Count finite observations in the latest nominal estimation window."""
+    start = max(0, end - _window_for(metric) + 1)
+    window = frame.iloc[start : end + 1]
+    if metric.startswith("beta_"):
+        anchor_name = metric.removeprefix("beta_")
+        if anchor_name not in window.columns:
+            return 0
+        values = window[["asset", anchor_name]].to_numpy(dtype=float)
+        return int(np.isfinite(values).all(axis=1).sum())
+    return int(np.isfinite(window["asset"].to_numpy(dtype=float)).sum())
 
 
 def _invalid_numeric_status(values: np.ndarray) -> str | None:
@@ -230,5 +255,8 @@ def calculate_risk_vector(
         normalized, normalization_status = _normalize_metric(
             frame, metric, value, status, threshold
         )
-        result[metric] = _record(value, status, normalized, normalization_status)
+        item = _record(value, status, normalized, normalization_status)
+        item["window_weeks"] = _window_for(metric)
+        item["observation_count"] = _observation_count(frame, metric, len(frame) - 1)
+        result[metric] = item
     return result

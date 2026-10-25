@@ -1,0 +1,77 @@
+{
+  "asset_symbol": "7203.T",
+  "analysis_currency": "JPY",
+  "price_fields": {
+    "7203.T": "Adj Close",
+    "1540.T": "Adj Close",
+    "1306.T": "Adj Close",
+    "^GSPC": "Close",
+    "TLT": "Adj Close",
+    "2510.T": "Adj Close"
+  },
+  "fx_alignment": "exact_calendar_date_no_fill",
+  "asset": {
+    "as_of": "2026-10-23T00:00:00",
+    "sigma": {
+      "value": 0.2671797545634205,
+      "status": "ok",
+      "normalized": -0.877346858846674,
+      "normalization_status": "ok",
+      "window_weeks": 52,
+      "observation_count": 52
+    },
+    "ES": {
+      "value": 0.08152291829932985,
+      "status": "ok",
+      "normalized": 0.2795305539153394,
+      "normalization_status": "ok",
+      "window_weeks": 156,
+      "observation_count": 156
+    },
+    "beta_gold": {
+      "value": 0.13270293768019742,
+      "status": "ok",
+      "normalized": 4.9855402761199885,
+      "normalization_status": "ok",
+      "window_weeks": 52,
+      "observation_count": 52
+    },
+    "beta_us_equity": {
+      "value": 0.1417383865022261,
+      "status": "ok",
+      "normalized": -2.349922388080959,
+      "normalization_status": "ok",
+      "window_weeks": 52,
+      "observation_count": 52
+    },
+    "beta_japan_equity": {
+      "value": 0.7078389984439125,
+      "status": "ok",
+      "normalized": -1.8032691384209403,
+      "normalization_status": "ok",
+      "window_weeks": 52,
+      "observation_count": 52
+    },
+    "beta_us_treasury": {
+      "value": 0.5448457529242493,
+      "status": "ok",
+      "normalized": 0.21166139670721193,
+      "normalization_status": "ok",
+      "window_weeks": 52,
+      "observation_count": 52
+    },
+    "beta_japan_bond": {
+      "value": 0.26911327528853324,
+      "status": "ok",
+      "normalized": 0.6470546276979469,
+      "normalization_status": "ok",
+      "window_weeks": 52,
+      "observation_count": 52
+    }
+  },
+  "portfolio": null,
+  "portfolio_status": "not_configured",
+  "portfolio_reason": "portfolio_configuration_is_null",
+  "portfolio_mode": null,
+  "generated_at": "2026-10-25T04:44:27.968063+00:00"
+}

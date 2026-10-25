@@ -213,6 +213,12 @@ class Layer1PipelineTests(unittest.TestCase):
         self.assertAlmostEqual(
             payload["portfolio"]["sigma"]["value"], payload["asset"]["sigma"]["value"]
         )
+        self.assertEqual(payload["asset"]["sigma"]["window_weeks"], 52)
+        self.assertEqual(payload["asset"]["sigma"]["observation_count"], 52)
+        self.assertEqual(payload["asset"]["ES"]["window_weeks"], 156)
+        self.assertEqual(payload["asset"]["ES"]["observation_count"], 156)
+        self.assertEqual(payload["asset"]["beta_us_equity"]["window_weeks"], 52)
+        self.assertEqual(payload["asset"]["beta_us_equity"]["observation_count"], 52)
         self.assertEqual(payload["asset"]["beta_us_equity"]["status"], "ok")
         self.assertNotIn("beta_usd_jpy", payload["asset"])
         converted_weekly = np.diff(

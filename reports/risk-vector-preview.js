@@ -1,15 +1,18 @@
 (function (root) {
   "use strict";
 
-  const AXES = [
-    { key: "sigma", label: "σ 年率", kind: "return" },
-    { key: "ES", label: "ES 95%", kind: "return" },
-    { key: "beta_gold", label: "Gold β", kind: "beta" },
-    { key: "beta_us_equity", label: "US Equity β", kind: "beta" },
-    { key: "beta_japan_equity", label: "Japan Equity β", kind: "beta" },
-    { key: "beta_us_treasury", label: "US Treasury β", kind: "beta" },
-    { key: "beta_japan_bond", label: "Japan Bond β", kind: "beta" },
+  const BETA_AXES = [
+    { key: "beta_gold", label: "Gold", ticker: "1540.T" },
+    { key: "beta_us_equity", label: "US Equity", ticker: "^GSPC" },
+    { key: "beta_japan_equity", label: "Japan Equity", ticker: "1306.T" },
+    { key: "beta_us_treasury", label: "US Treasury", ticker: "TLT" },
+    { key: "beta_japan_bond", label: "Japan Bond", ticker: "2510.T" },
   ];
+  const RISK_METRICS = [
+    { key: "sigma", label: "σ 年率", unit: "%", window: 52, detail: "週次標本標準偏差 × √52" },
+    { key: "ES", label: "ES 95%", unit: "%", window: 156, detail: "損失上位8週の符号付き平均" },
+  ];
+  const BETA_DISPLAY_LIMIT = 3.0;
   const LABELS = {
     ok: "計算済み",
     insufficient_history: "履歴不足",
@@ -21,47 +24,43 @@
     configuration_error: "設定不足",
     calculation_error: "計算エラー",
     not_configured: "未設定",
-    partial_or_invalid_history: "一部の週を計算できません",
   };
 
   function statusLabel(status) {
     return LABELS[status] || status || "状態不明";
   }
 
-  function formatValue(metric, value) {
-    if (!Number.isFinite(value)) return "未算出";
-    const axis = AXES.find((item) => item.key === metric);
-    if (axis && axis.kind === "return") return `${(value * 100).toFixed(2)}%`;
-    return value.toFixed(3);
+  function valueStatus(item) {
+    return item && item.status === "ok" && !Number.isFinite(item.value)
+      ? "calculation_error" : item && item.status;
   }
 
-  function buildRadarModel(vector) {
-    const raw = AXES.map((axis) => {
+  function formatValue(metric, value) {
+    if (!Number.isFinite(value)) return "未算出";
+    if (metric === "sigma" || metric === "ES") return `${(value * 100).toFixed(2)}%`;
+    return `${value > 0 ? "+" : ""}${value.toFixed(3)}`;
+  }
+
+  function buildBetaBarModel(vector, displayLimit = BETA_DISPLAY_LIMIT) {
+    return BETA_AXES.map((axis) => {
       const item = vector && vector[axis.key];
-      const value = item && item.normalized;
-      return Number.isFinite(value) && item.normalization_status === "ok"
-        ? value
-        : null;
-    });
-    const scale = Math.max(1, ...raw.filter(Number.isFinite).map(Math.abs));
-    const points = raw.map((value, index) => {
-      if (value === null) return null;
-      const angle = -Math.PI / 2 + (2 * Math.PI * index) / AXES.length;
-      // Signed z-scores use the middle ring as zero; negative values move inward.
-      const radius = 120 * (value / scale + 1) / 2;
+      const valid = Boolean(item && item.status === "ok" && Number.isFinite(item.value));
+      const value = valid ? item.value : null;
+      const magnitude = valid ? Math.min(Math.abs(value) / displayLimit, 1) * 50 : 0;
       return {
-        x: 180 + radius * Math.cos(angle),
-        y: 165 + radius * Math.sin(angle),
+        ...axis,
+        value,
+        status: valueStatus(item),
+        observation_count: item && Number.isInteger(item.observation_count)
+          ? item.observation_count : null,
+        window_weeks: item && Number.isInteger(item.window_weeks)
+          ? item.window_weeks : 52,
+        clipped: valid && Math.abs(value) > displayLimit,
+        left: value !== null && value < 0 ? 50 - magnitude : 50,
+        width: magnitude,
+        zero: valid && value === 0,
       };
     });
-    const segments = [];
-    for (let index = 0; index < points.length; index += 1) {
-      const next = (index + 1) % points.length;
-      if (points[index] && points[next]) {
-        segments.push([points[index], points[next]]);
-      }
-    }
-    return { axes: AXES, raw, points, segments, scale };
   }
 
   function escapeHtml(value) {
@@ -70,67 +69,76 @@
     })[char]);
   }
 
-  function metricCards(vector) {
-    return `<div class="stats">${AXES.map((axis) => {
-      const item = vector && vector[axis.key];
-      const value = item && item.value;
-      const normalized = item && item.normalized;
-      const reason = statusLabel(item && item.status);
-      const normReason = statusLabel(item && item.normalization_status);
-      return `<div class="stat"><div class="label">${axis.label}</div>`
-        + `<div class="value">${formatValue(axis.key, value)}</div>`
-        + `<div class="detail">${escapeHtml(reason)} · 正規化 `
-        + `${Number.isFinite(normalized) ? normalized.toFixed(2) : escapeHtml(normReason)}</div></div>`;
-    }).join("")}</div>`;
+  function observationText(item, fallbackWindow) {
+    const windowWeeks = Number.isInteger(item && item.window_weeks)
+      ? item.window_weeks : fallbackWindow;
+    const count = Number.isInteger(item && item.observation_count)
+      ? item.observation_count : "不明";
+    return `対象 ${windowWeeks}週 · 有効観測 ${count}`;
   }
 
-  function radarSvg(vector) {
-    const model = buildRadarModel(vector);
-    const cx = 180;
-    const cy = 165;
-    const outer = 120;
-    const grid = [0.25, 0.5, 0.75, 1].map((fraction) => {
-      const points = model.axes.map((_, index) => {
-        const angle = -Math.PI / 2 + (2 * Math.PI * index) / model.axes.length;
-        return `${cx + outer * fraction * Math.cos(angle)},${cy + outer * fraction * Math.sin(angle)}`;
-      }).join(" ");
-      return `<polygon class="radar-grid" fill="none" stroke="#344354" points="${points}"></polygon>`;
+  function renderRiskLevels(vector) {
+    return `<section class="risk-level"><h3>リスク水準</h3><div class="stats">`
+      + RISK_METRICS.map((metric) => {
+        const item = vector && vector[metric.key];
+        const valid = item && item.status === "ok" && Number.isFinite(item.value);
+        const status = valid ? "計算済み" : statusLabel(valueStatus(item));
+        return `<article class="stat"><div class="label">${metric.label}</div>`
+          + `<div class="value">${valid ? formatValue(metric.key, item.value) : "未算出"}</div>`
+          + `<div class="detail">${metric.unit} · ${metric.detail}</div>`
+          + `<div class="detail">${escapeHtml(status)} · ${escapeHtml(observationText(item, metric.window))}</div>`
+          + `</article>`;
+      }).join("")
+      + `</div></section>`;
+  }
+
+  function renderBetaBars(vector) {
+    const model = buildBetaBarModel(vector);
+    return `<section class="sensitivity"><h3>アンカー感応度 <span class="muted">実測β</span></h3>`
+      + `<p class="detail">β=0を中央に表示。青は正、赤は負です。表示範囲は −3.0〜+3.0。範囲外はクリップし、実測値を併記します。</p>`
+      + `<div class="beta-axis"><span>−3</span><span>β=0</span><span>+3</span></div>`
+      + model.map((axis) => {
+        const valid = axis.value !== null;
+        const formatted = valid ? formatValue(axis.key, axis.value) : "未算出";
+        const tooltip = `${axis.label} (${axis.ticker}): β ${formatted}; ${observationText(axis, 52)}; ${statusLabel(axis.status)}`;
+        const fill = valid && !axis.zero
+          ? `<span class="beta-fill ${axis.value < 0 ? "negative" : "positive"}" style="left:${axis.left}%;width:${axis.width}%"></span>`
+          : "";
+        const zero = axis.zero ? `<span class="beta-zero" aria-label="βゼロ"></span>` : "";
+        const clipText = axis.clipped ? `<span class="clip-label">表示範囲超過</span>` : "";
+        const detail = valid
+          ? `${escapeHtml(observationText(axis, 52))}${axis.clipped ? " · 表示範囲超過" : ""}`
+          : statusLabel(axis.status);
+        return `<div class="beta-row" title="${escapeHtml(tooltip)}">`
+          + `<div class="beta-label">${axis.label}<small>${axis.ticker}</small></div>`
+          + `<div class="beta-track">${fill}${zero}</div>`
+          + `<div class="beta-number">${valid ? formatted : escapeHtml(statusLabel(axis.status))}${clipText}</div>`
+          + `<div class="beta-detail">${escapeHtml(detail)}</div></div>`;
+      }).join("")
+      + `</section>`;
+  }
+
+  function renderNormalizationDetails(vector) {
+    const metrics = [...RISK_METRICS.map((metric) => metric.key), ...BETA_AXES.map((axis) => axis.key)];
+    const rows = metrics.map((key) => {
+      const item = vector && vector[key];
+      const normalized = item && item.normalized;
+      const status = item && item.normalization_status;
+      const value = status === "ok" && Number.isFinite(normalized)
+        ? `${normalized > 0 ? "+" : ""}${normalized.toFixed(2)}`
+        : status === "ok" ? "正規化値なし" : statusLabel(status);
+      return `<li><span>${escapeHtml(key)}</span>: ${escapeHtml(value)}</li>`;
     }).join("");
-    const spokes = model.axes.map((axis, index) => {
-      const angle = -Math.PI / 2 + (2 * Math.PI * index) / model.axes.length;
-      const x = cx + outer * Math.cos(angle);
-      const y = cy + outer * Math.sin(angle);
-      const lx = cx + (outer + 31) * Math.cos(angle);
-      const ly = cy + (outer + 31) * Math.sin(angle);
-      const anchor = Math.abs(lx - cx) < 12 ? "middle" : lx < cx ? "end" : "start";
-      return `<line class="radar-spoke" stroke="#48596c" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"></line>`
-        + `<text class="radar-label" fill="#edf4fb" font-size="11" x="${lx}" y="${ly}" text-anchor="${anchor}">${axis.label}</text>`;
-    }).join("");
-    const segments = model.segments.map(([a, b]) =>
-      `<line class="radar-segment" stroke="#70b7ff" stroke-width="3" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"></line>`
-    ).join("");
-    const points = model.points.map((point, index) => point
-      ? `<circle class="radar-point" fill="#70b7ff" stroke="#10151d" stroke-width="2" cx="${point.x}" cy="${point.y}" r="4"><title>${model.axes[index].label}: ${model.raw[index].toFixed(2)}</title></circle>`
-      : "").join("");
-    const zeroRing = `<polygon class="radar-zero" fill="none" stroke="#8493a4" stroke-dasharray="4 3" points="${model.axes.map((_, index) => {
-      const angle = -Math.PI / 2 + (2 * Math.PI * index) / model.axes.length;
-      const radius = outer / 2;
-      return `${cx + radius * Math.cos(angle)},${cy + radius * Math.sin(angle)}`;
-    }).join(" ")}"></polygon>`;
-    const hasValues = model.points.some(Boolean);
-    return `<svg class="radar" width="100%" height="330" style="height:auto;max-height:440px;display:block;margin:auto" viewBox="0 0 360 330" role="img" aria-label="正規化リスクベクトル">`
-      + `<title>銘柄自身の過去52週に対する正規化リスクベクトル</title>`
-      + `${grid}${zeroRing}${spokes}${segments}${points}</svg>`
-      + `<p class="detail">中心側は負、中央線は0、外側は正。表示値は当該銘柄自身の履歴に対するz値です。`
-      + `${hasValues ? "未算出軸は点・線を描きません。" : "正規化可能な値がないため、レーダー点はありません。"}</p>`;
+    return `<details class="normalization"><summary>過去分布に対する相対位置（補助情報）</summary>`
+      + `<p class="detail">各指標の生値を、その銘柄自身の直前52週の中央値・IQRと比較した値です。βの感応度や銘柄間の絶対リスクを表しません。</p>`
+      + `<ul>${rows}</ul></details>`;
   }
 
   function renderVector(vector) {
-    if (!vector || !vector.sigma) {
-      return `<div class="notice">${escapeHtml(statusLabel(vector && vector.status))}`
-        + `${vector && vector.reason ? ` · ${escapeHtml(vector.reason)}` : ""}</div>`;
+    if (!vector || typeof vector !== "object") {
+      return `<div class="notice">計算結果がありません。</div>`;
     }
-    return radarSvg(vector) + metricCards(vector);
+    return renderRiskLevels(vector) + renderBetaBars(vector) + renderNormalizationDetails(vector);
   }
 
   function portfolioMessage(snapshot) {
@@ -152,9 +160,10 @@
       ? "シナリオ分析（現在ウェイトを過去へ適用）"
       : mode === "realized" ? "実績分析（当週の期初ウェイト）" : "分析モード未設定";
     const diagnostics = vector.portfolio_diagnostics;
+    const issues = diagnostics && Array.isArray(diagnostics.issues) ? diagnostics.issues : [];
     const issueSummary = diagnostics && diagnostics.invalid_weeks
       ? `<p class="notice">計算不能週 ${diagnostics.invalid_weeks} / 有効週 ${diagnostics.valid_weeks}<br>`
-        + diagnostics.issues.map((issue) => `${escapeHtml(issue.week_ending)}: ${escapeHtml(statusLabel(issue.status))} (${escapeHtml(issue.reason)})`).join("<br>")
+        + issues.map((issue) => `${escapeHtml(issue.week_ending)}: ${escapeHtml(statusLabel(issue.status))} (${escapeHtml(issue.reason)})`).join("<br>")
         + `</p>`
       : "";
     return `<p class="badge">${escapeHtml(modeLabel)}</p>${issueSummary}${renderVector(vector)}`;
@@ -162,6 +171,7 @@
 
   function displaySnapshot(doc, snapshot) {
     doc.querySelector("#status").textContent = "計算データを読み込みました";
+    doc.querySelector("#status").classList.remove("error");
     doc.querySelector("#asof").textContent = snapshot.asset && snapshot.asset.as_of
       ? `基準週 ${snapshot.asset.as_of}` : "基準週 未算出";
     doc.querySelector("#asset-symbol").textContent = snapshot.asset_symbol || "";
@@ -183,7 +193,7 @@
       const response = await fetcher("../data/layer1/7203.T_risk_vector.json", { cache: "no-store" });
       if (!response.ok) throw new Error("計算結果JSONがありません");
       const snapshot = await response.json();
-      if (!snapshot || typeof snapshot !== "object" || !snapshot.asset) {
+      if (!snapshot || typeof snapshot !== "object" || !snapshot.asset || typeof snapshot.asset !== "object") {
         throw new Error("計算結果JSONの形式が不正です");
       }
       displaySnapshot(doc, snapshot);
@@ -195,7 +205,16 @@
     }
   }
 
-  const api = { AXES, buildRadarModel, formatValue, portfolioMessage, renderVector, renderPortfolio, loadSnapshot };
+  const api = {
+    BETA_AXES,
+    BETA_DISPLAY_LIMIT,
+    buildBetaBarModel,
+    formatValue,
+    portfolioMessage,
+    renderVector,
+    renderPortfolio,
+    loadSnapshot,
+  };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   if (root.document) loadSnapshot(root.document, root.fetch.bind(root));
 })(globalThis);

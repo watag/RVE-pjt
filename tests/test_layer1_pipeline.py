@@ -1,6 +1,8 @@
 """Integration tests for the v1.0 daily-price-to-vector entry point."""
 
 import sys
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,6 +14,7 @@ LAYER1_DIR = Path(__file__).resolve().parents[1] / "layer1"
 sys.path.insert(0, str(LAYER1_DIR))
 
 from layer1_vector import build_risk_vector_from_daily_prices  # noqa: E402
+from layer1_vector import main as run_layer1_main  # noqa: E402
 from risk_metrics import ANCHORS  # noqa: E402
 
 
@@ -88,6 +91,76 @@ class Layer1PipelineTests(unittest.TestCase):
         self.assertEqual(result["ES"]["status"], "ok")
         self.assertEqual(result["beta_gold"]["status"], "configuration_error")
         self.assertEqual(result["beta_us_equity"]["status"], "ok")
+
+    def test_main_writes_vector_from_jpy_converted_prices_and_five_anchors(self):
+        import yaml
+
+        count = 220
+        dates = pd.date_range("2021-01-01", periods=count + 1, freq="W-FRI")
+        step = np.arange(count, dtype=float)
+        fx_returns = 0.002 * np.sin(step * 0.19) + 0.0004
+        us_returns = 0.012 * np.cos(step * 0.13) + 0.001 * np.sin(step * 0.031)
+        asset_returns = 0.4 * us_returns + 0.3 * fx_returns + 0.003 * np.sin(step * 0.17)
+        prices = {
+            "7203.T": prices_from_returns(dates, asset_returns),
+            "1540.T": prices_from_returns(dates, 0.008 * np.sin(step * 0.11)),
+            "1306.T": prices_from_returns(dates, 0.009 * np.cos(step * 0.09)),
+            "^GSPC": prices_from_returns(dates, us_returns),
+            "TLT": prices_from_returns(dates, 0.004 * np.sin(step * 0.07)),
+            "2510.T": prices_from_returns(dates, 0.002 * np.cos(step * 0.05)),
+            "JPY=X": prices_from_returns(dates, fx_returns),
+        }
+        tickers = [
+            {"symbol": "7203.T", "currency": "JPY", "role": "asset"},
+            {"symbol": "1540.T", "currency": "JPY", "anchor_key": "gold"},
+            {"symbol": "1306.T", "currency": "JPY", "anchor_key": "japan_equity"},
+            {"symbol": "^GSPC", "currency": "USD", "anchor_key": "us_equity"},
+            {"symbol": "TLT", "currency": "USD", "anchor_key": "us_treasury"},
+            {"symbol": "2510.T", "currency": "JPY", "anchor_key": "japan_bond"},
+            {"symbol": "JPY=X", "currency": "JPY per USD", "role": "fx"},
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_dir = root / "processed"
+            data_dir.mkdir()
+            output_dir = root / "layer1"
+            config_path = root / "tickers.yaml"
+            config_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "tickers": tickers,
+                        "normalization": {"iqr_thresholds": {}},
+                        "portfolio": {
+                            "mode": "scenario",
+                            "current_weights": {"7203.T": 1.0},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for symbol, frame in prices.items():
+                frame.to_csv(data_dir / f"{symbol}.csv", index=False)
+
+            run_layer1_main(data_dir, output_dir, config_path)
+            output_path = output_dir / "7203.T_risk_vector.json"
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["fx_alignment"], "exact_calendar_date_no_fill")
+        self.assertEqual(payload["portfolio_mode"], "scenario")
+        self.assertEqual(payload["portfolio"]["analysis_mode"], "scenario")
+        self.assertAlmostEqual(
+            payload["portfolio"]["sigma"]["value"], payload["asset"]["sigma"]["value"]
+        )
+        self.assertEqual(payload["asset"]["beta_us_equity"]["status"], "ok")
+        self.assertNotIn("beta_usd_jpy", payload["asset"])
+        converted_weekly = np.diff(
+            prices["^GSPC"]["Close"].to_numpy() * prices["JPY=X"]["Close"].to_numpy()
+        ) / (prices["^GSPC"]["Close"].to_numpy() * prices["JPY=X"]["Close"].to_numpy())[:-1]
+        expected_beta = np.cov(asset_returns[-52:], converted_weekly[-52:], ddof=1)[0, 1] / np.var(
+            converted_weekly[-52:], ddof=1
+        )
+        self.assertAlmostEqual(payload["asset"]["beta_us_equity"]["value"], expected_beta)
 
 
 if __name__ == "__main__":

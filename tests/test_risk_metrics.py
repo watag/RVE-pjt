@@ -92,6 +92,41 @@ class WeeklyRiskVectorTests(unittest.TestCase):
         self.assertEqual(result["ES"]["status"], "missing_price")
         self.assertEqual(result["beta_gold"]["status"], "missing_price")
 
+    def test_missing_fx_status_is_not_collapsed_into_missing_price(self):
+        asset, anchors = make_weekly_returns()
+        statuses = pd.Series("ok", index=asset.index)
+        statuses.iloc[-1] = "missing_fx"
+        asset.iloc[-1] = np.nan
+
+        result = calculate_risk_vector(
+            asset, anchors, thresholds(), asset_statuses=statuses
+        )
+
+        self.assertEqual(result["sigma"]["status"], "missing_fx")
+        self.assertEqual(result["ES"]["status"], "missing_fx")
+
+    def test_infinite_return_is_invalid_price(self):
+        asset, anchors = make_weekly_returns()
+        asset.iloc[-1] = np.inf
+
+        result = calculate_risk_vector(asset, anchors, thresholds())
+
+        self.assertEqual(result["sigma"]["status"], "invalid_price")
+
+    def test_missing_fx_on_one_anchor_does_not_hide_other_metrics(self):
+        asset, anchors = make_weekly_returns()
+        anchor_status = pd.DataFrame("ok", index=anchors.index, columns=anchors.columns)
+        anchor_status.loc[anchors.index[-1], "us_equity"] = "missing_fx"
+        anchors.loc[anchors.index[-1], "us_equity"] = np.nan
+
+        result = calculate_risk_vector(
+            asset, anchors, thresholds(), anchor_statuses=anchor_status
+        )
+
+        self.assertEqual(result["sigma"]["status"], "ok")
+        self.assertEqual(result["beta_us_equity"]["status"], "missing_fx")
+        self.assertEqual(result["beta_gold"]["status"], "ok")
+
     def test_zero_variance_anchor_has_its_own_status(self):
         asset, anchors = make_weekly_returns()
         anchors["gold"] = 0.01

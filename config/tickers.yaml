@@ -2,22 +2,57 @@ tickers:
   # 対象
   - symbol: 7203.T
     name: toyota
+    role: asset
+    currency: JPY
+    price_field: Adj Close
 
   # 因子
   - symbol: 1540.T
     name: gold
+    currency: JPY
+    price_field: Adj Close
+    anchor_key: gold
 
   - symbol: 1306.T
     name: topix
+    currency: JPY
+    price_field: Adj Close
+    anchor_key: japan_equity
 
   - symbol: ^GSPC
     name: sp500
+    currency: USD
+    price_field: Close
+    anchor_key: us_equity
 
   - symbol: TLT
     name: ust
+    currency: USD
+    price_field: Adj Close
+    anchor_key: us_treasury
 
   - symbol: 2510.T
     name: jgb
+    currency: JPY
+    price_field: Adj Close
+    anchor_key: japan_bond
 
   - symbol: JPY=X
     name: usd_jpy
+    currency: JPY per USD
+    price_field: Close
+    role: fx
+
+normalization:
+  # Threshold values remain null until calibrated against representative histories.
+  iqr_thresholds:
+    sigma: null
+    ES: null
+    beta_gold: null
+    beta_us_equity: null
+    beta_japan_equity: null
+    beta_us_treasury: null
+    beta_japan_bond: null
+
+# No holdings history/current weights are included in this source snapshot.
+portfolio: null

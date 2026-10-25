@@ -34,6 +34,7 @@ def build_weekly_returns(
     daily_prices: pd.DataFrame,
     date_column: str = "Date",
     price_column: str = "Close",
+    status_column: str = "price_status",
 ) -> pd.DataFrame:
     """Return Friday-indexed weekly closes and simple returns.
 
@@ -59,9 +60,12 @@ def build_weekly_returns(
         return _configuration_error()
 
     prices = pd.to_numeric(daily_prices[price_column], errors="coerce")
-    frame = pd.DataFrame({"price_date": dates, "price": prices}).sort_values(
-        "price_date"
-    )
+    frame = pd.DataFrame({"price_date": dates, "price": prices})
+    if status_column in daily_prices.columns:
+        frame["source_status"] = daily_prices[status_column].astype("string").fillna("missing_price")
+    else:
+        frame["source_status"] = "ok"
+    frame = frame.sort_values("price_date")
     frame["week_ending"] = frame["price_date"].dt.to_period("W-FRI").dt.end_time.dt.normalize()
 
     # Use the final source row, including a missing/invalid close, rather than
@@ -81,6 +85,9 @@ def build_weekly_returns(
         else:
             price_status.append("ok")
     weekly["price_status"] = price_status
+    source_status = weekly["source_status"].fillna("missing_price").astype(str)
+    weekly.loc[source_status != "ok", "price_status"] = source_status[source_status != "ok"]
+    weekly.loc[weekly["price_status"] != "ok", "price"] = np.nan
     weekly.loc[weekly["price_status"] == "invalid_price", "price"] = np.nan
 
     returns: list[float] = []

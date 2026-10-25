@@ -14,6 +14,12 @@ BOOTSTRAP_HISTORY_WEEKS = (
 RECENT_OVERLAP_DAYS = 7
 
 
+def price_history_filename(symbol: str, price_field: str) -> str:
+    """Keep differently adjusted price histories in separate CSV files."""
+    suffix = price_field.strip().replace(" ", "_")
+    return f"{symbol}.csv" if suffix == "Close" else f"{symbol}.{suffix}.csv"
+
+
 def load_config(path: str | Path) -> dict:
     import yaml
 
@@ -21,8 +27,10 @@ def load_config(path: str | Path) -> dict:
         return yaml.safe_load(config_file)
 
 
-def _as_daily_frame(downloaded: pd.DataFrame, symbol: str) -> pd.DataFrame:
-    """Select the downloaded Close column and return the legacy CSV schema."""
+def _as_daily_frame(
+    downloaded: pd.DataFrame, symbol: str, price_field: str = "Close"
+) -> pd.DataFrame:
+    """Select the configured price field and store it under the legacy Close name."""
     if downloaded is None or downloaded.empty:
         return pd.DataFrame(columns=["Date", "Close"])
 
@@ -31,18 +39,18 @@ def _as_daily_frame(downloaded: pd.DataFrame, symbol: str) -> pd.DataFrame:
         close_columns = [
             column
             for column in frame.columns
-            if "Close" in column and (symbol in column or len(frame.columns) == 1)
+            if price_field in column and (symbol in column or len(frame.columns) == 1)
         ]
         if not close_columns:
-            close_columns = [column for column in frame.columns if "Close" in column]
+            close_columns = [column for column in frame.columns if price_field in column]
         if not close_columns:
-            raise ValueError(f"Downloaded data for {symbol} has no Close column")
+            raise ValueError(f"Downloaded data for {symbol} has no {price_field!r} column")
         frame = frame[[close_columns[0]]]
         frame.columns = ["Close"]
-    elif "Close" in frame.columns:
-        frame = frame[["Close"]]
+    elif price_field in frame.columns:
+        frame = frame[[price_field]].rename(columns={price_field: "Close"})
     else:
-        raise ValueError(f"Downloaded data for {symbol} has no Close column")
+        raise ValueError(f"Downloaded data for {symbol} has no {price_field!r} column")
 
     frame = frame.reset_index()
     if "Date" not in frame.columns:
@@ -69,7 +77,10 @@ def merge_price_history(
         normalized = candidate[["Date", "Close"]].copy()
         normalized["Date"] = pd.to_datetime(normalized["Date"], errors="coerce")
         normalized["Close"] = pd.to_numeric(normalized["Close"], errors="coerce")
-        normalized = normalized.dropna(subset=["Date"])
+        if normalized["Date"].isna().any():
+            raise ValueError("Price history contains invalid dates")
+        if normalized["Date"].duplicated().any():
+            raise ValueError("Price history contains duplicate dates")
         frames.append(normalized)
 
     if not frames:
@@ -105,12 +116,13 @@ def fetch_and_save(
     output_dir: str | Path | None = None,
     downloader: Callable | None = None,
     as_of: str | pd.Timestamp | None = None,
+    price_field: str = "Close",
 ) -> Path:
     """Download a backfill or recent delta and atomically merge it into history."""
     repository_root = Path(__file__).resolve().parents[1]
     destination = Path(output_dir) if output_dir is not None else repository_root / "data" / "processed"
     destination.mkdir(parents=True, exist_ok=True)
-    path = destination / f"{symbol}.csv"
+    path = destination / price_history_filename(symbol, price_field)
     today = pd.Timestamp(as_of).normalize() if as_of is not None else pd.Timestamp.today().normalize()
 
     if path.exists():
@@ -129,8 +141,13 @@ def fetch_and_save(
         start=start.strftime("%Y-%m-%d"),
         end=end.strftime("%Y-%m-%d"),
         progress=False,
+        auto_adjust=False,
     )
-    fresh = _as_daily_frame(download, symbol)
+    fresh = _as_daily_frame(download, symbol, price_field=price_field)
+    if fresh.empty:
+        raise ValueError(
+            f"No {price_field!r} rows downloaded for {symbol}; existing history was not changed"
+        )
     merged = merge_price_history(existing, fresh)
 
     temporary_path = path.with_name(f".{path.name}.tmp")
@@ -145,7 +162,10 @@ def main() -> None:
     output_dir = repository_root / "data" / "processed"
 
     for ticker in config["tickers"]:
-        fetch_and_save(ticker["symbol"], output_dir=output_dir)
+        fetch_and_save(
+            ticker["symbol"], output_dir=output_dir,
+            price_field=ticker.get("price_field", "Close"),
+        )
 
 
 if __name__ == "__main__":

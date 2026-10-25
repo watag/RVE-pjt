@@ -48,6 +48,29 @@ def _invalid_numeric_status(values: np.ndarray) -> str | None:
     return None
 
 
+def _window_status(window: pd.DataFrame, columns: list[str]) -> str:
+    """Return a specific source status for a window containing missing values."""
+    candidates: list[str] = []
+    for column in columns:
+        status_column = f"{column}_status"
+        values = window[column].to_numpy(dtype=float)
+        if status_column in window:
+            statuses = window[status_column].astype(str).to_numpy()
+            candidates.extend(statuses[~np.isfinite(values)].tolist())
+        else:
+            statuses = np.full(len(values), "ok", dtype=object)
+        if np.isinf(values).any():
+            candidates.append("invalid_price")
+        if np.isnan(values).any() and not np.isin(
+            statuses[~np.isfinite(values)], ["missing_fx", "invalid_price", "configuration_error"]
+        ).any():
+            candidates.append("missing_price")
+    for status in ("missing_fx", "invalid_price", "missing_price", "configuration_error"):
+        if status in candidates:
+            return status
+    return "missing_price"
+
+
 def _metric_at(frame: pd.DataFrame, metric: str, end: int) -> tuple[float | None, str]:
     """Calculate one metric at row ``end`` using a trailing inclusive window."""
     if metric == "sigma":
@@ -66,7 +89,7 @@ def _metric_at(frame: pd.DataFrame, metric: str, end: int) -> tuple[float | None
         values = window["asset"].to_numpy(dtype=float)
         invalid_status = _invalid_numeric_status(values)
         if invalid_status:
-            return None, invalid_status
+            return None, _window_status(window, ["asset"])
 
         if metric == "sigma":
             value = float(np.std(values, ddof=1) * np.sqrt(ANNUALIZATION_WEEKS))
@@ -83,7 +106,7 @@ def _metric_at(frame: pd.DataFrame, metric: str, end: int) -> tuple[float | None
     paired = window[["asset", anchor_name]].to_numpy(dtype=float)
     invalid_status = _invalid_numeric_status(paired)
     if invalid_status:
-        return None, invalid_status
+        return None, _window_status(window, ["asset", anchor_name])
 
     asset_values = paired[:, 0]
     anchor_values = paired[:, 1]
@@ -150,6 +173,8 @@ def calculate_risk_vector(
     asset_returns: pd.Series,
     anchor_returns: pd.DataFrame,
     iqr_thresholds: Mapping[str, float] | None = None,
+    asset_statuses: pd.Series | None = None,
+    anchor_statuses: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Calculate the latest 7D vector from aligned weekly simple returns.
 
@@ -186,6 +211,14 @@ def calculate_risk_vector(
         anchors = pd.DataFrame(index=asset.index)
 
     frame = pd.concat([asset.rename("asset"), anchors], axis=1)
+    if isinstance(asset_statuses, pd.Series):
+        frame["asset_status"] = asset_statuses.reindex(asset.index).fillna("missing_price").astype(str)
+    if isinstance(anchor_statuses, pd.DataFrame):
+        for column in anchors.columns:
+            if column in anchor_statuses:
+                frame[f"{column}_status"] = (
+                    anchor_statuses[column].reindex(asset.index).fillna("missing_price").astype(str)
+                )
     if frame.empty:
         return {"as_of": None, **_empty_vector("insufficient_history")}
 

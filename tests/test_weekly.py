@@ -97,6 +97,20 @@ class WeeklyPricePreparationTests(unittest.TestCase):
         self.assertEqual(result.iloc[0]["price_status"], "missing_price")
         self.assertTrue(np.isnan(result.iloc[0]["price"]))
 
+    def test_source_fx_status_survives_weekly_aggregation(self):
+        prices = pd.DataFrame(
+            {
+                "Date": pd.to_datetime(["2025-01-03", "2025-01-10"]),
+                "Close": [15000.0, np.nan],
+                "price_status": ["ok", "missing_fx"],
+            }
+        )
+
+        result = build_weekly_returns(prices)
+
+        self.assertEqual(result.iloc[-1]["price_status"], "missing_fx")
+        self.assertEqual(result.iloc[-1]["return_status"], "missing_fx")
+
 
 if __name__ == "__main__":
     unittest.main()

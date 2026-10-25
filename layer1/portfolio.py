@@ -3,6 +3,8 @@
 import numpy as np
 import pandas as pd
 
+from risk_metrics import calculate_risk_vector
+
 
 WEIGHT_SUM_TOLERANCE = 1e-9
 
@@ -91,3 +93,41 @@ def calculate_portfolio_returns(
         {"portfolio_return": portfolio_values, "status": statuses},
         index=returns.index,
     )
+
+
+def calculate_portfolio_risk_vector(
+    asset_returns: pd.DataFrame,
+    weights: pd.DataFrame | pd.Series,
+    anchor_returns: pd.DataFrame,
+    iqr_thresholds=None,
+    mode: str = "realized",
+) -> dict:
+    """Calculate a portfolio vector from its own weekly return series.
+
+    ``realized`` requires the actual beginning-of-week weights for every week.
+    ``scenario`` requires one current-weight Series, which is applied to each
+    historical week and explicitly labeled as a scenario result.
+    """
+    if mode == "scenario" and isinstance(weights, pd.Series):
+        weights = pd.DataFrame(
+            np.repeat(weights.to_numpy(dtype=float)[None, :], len(asset_returns), axis=0),
+            index=asset_returns.index,
+            columns=weights.index,
+        )
+    elif mode != "realized":
+        return {"analysis_mode": mode, "status": "configuration_error"}
+    elif not isinstance(weights, pd.DataFrame):
+        return {"analysis_mode": mode, "status": "configuration_error"}
+
+    portfolio = calculate_portfolio_returns(asset_returns, weights)
+    vector = calculate_risk_vector(
+        portfolio["portfolio_return"],
+        anchor_returns,
+        iqr_thresholds,
+        asset_statuses=portfolio["status"],
+    )
+    vector["analysis_mode"] = mode
+    vector["portfolio_status"] = (
+        "ok" if (portfolio["status"] == "ok").all() else "partial_or_invalid_history"
+    )
+    return vector

@@ -11,7 +11,7 @@ import pandas as pd
 LAYER1_DIR = Path(__file__).resolve().parents[1] / "layer1"
 sys.path.insert(0, str(LAYER1_DIR))
 
-from portfolio import calculate_portfolio_returns  # noqa: E402
+from portfolio import calculate_portfolio_returns, calculate_portfolio_risk_vector  # noqa: E402
 from risk_metrics import METRICS, calculate_risk_vector  # noqa: E402
 
 
@@ -101,6 +101,63 @@ class PortfolioReturnTests(unittest.TestCase):
         self.assertEqual(vector["sigma"]["status"], "ok")
         self.assertEqual(vector["ES"]["status"], "ok")
         self.assertEqual(vector["beta_us_equity"]["status"], "ok")
+
+    def test_scenario_mode_uses_fixed_current_weights_and_is_labeled(self):
+        dates = pd.date_range("2020-01-03", periods=220, freq="W-FRI")
+        step = np.arange(len(dates), dtype=float)
+        asset_returns = pd.DataFrame(
+            {"a": 0.01 * np.sin(step * 0.11), "b": 0.02 * np.cos(step * 0.09)},
+            index=dates,
+        )
+        anchors = pd.DataFrame(
+            {
+                name: 0.01 * np.sin(step * (0.03 + position * 0.01))
+                for position, name in enumerate(
+                    ["gold", "us_equity", "japan_equity", "us_treasury", "japan_bond"]
+                )
+            },
+            index=dates,
+        )
+        current_weights = pd.Series({"a": 0.25, "b": 0.75})
+
+        result = calculate_portfolio_risk_vector(
+            asset_returns, current_weights, anchors,
+            {metric: 0.0 for metric in METRICS}, mode="scenario",
+        )
+        expected_returns = 0.25 * asset_returns["a"] + 0.75 * asset_returns["b"]
+
+        self.assertEqual(result["analysis_mode"], "scenario")
+        self.assertEqual(result["portfolio_status"], "ok")
+        self.assertAlmostEqual(
+            result["sigma"]["value"], np.std(expected_returns.iloc[-52:], ddof=1) * np.sqrt(52)
+        )
+
+    def test_realized_mode_uses_the_historical_weight_series(self):
+        dates = pd.date_range("2020-01-03", periods=220, freq="W-FRI")
+        step = np.arange(len(dates), dtype=float)
+        returns = pd.DataFrame(
+            {"a": 0.01 * np.sin(step * 0.11), "b": 0.02 * np.cos(step * 0.09)},
+            index=dates,
+        )
+        weights = pd.DataFrame(
+            {"a": 0.2 + 0.1 * np.sin(step * 0.02), "b": 0.8 - 0.1 * np.sin(step * 0.02)},
+            index=dates,
+        )
+        names = ["gold", "us_equity", "japan_equity", "us_treasury", "japan_bond"]
+        anchors = pd.DataFrame(
+            {name: 0.01 * np.sin(step * (0.03 + i * 0.01)) for i, name in enumerate(names)},
+            index=dates,
+        )
+        expected = (returns * weights).sum(axis=1)
+
+        result = calculate_portfolio_risk_vector(
+            returns, weights, anchors, {metric: 0.0 for metric in METRICS}, mode="realized"
+        )
+
+        self.assertEqual(result["analysis_mode"], "realized")
+        self.assertAlmostEqual(
+            result["sigma"]["value"], np.std(expected.iloc[-52:], ddof=1) * np.sqrt(52)
+        )
 
 
 if __name__ == "__main__":

@@ -1,3 +1,9 @@
+Latest run after PR #6 update: 2026-10-25
+Command: PYTHONPYCACHEPREFIX=/tmp/rve-v1-audit-pycache /tmp/rve-layer1-ubuntu-venv/bin/python -m unittest discover -s tests -v
+Environment: Python 3.12.3, NumPy 2.5.4, pandas 3.0.6, PyYAML 6.0.3
+Result: 59 tests in 6.068s, OK (59 passed, 0 failed, 0 errors).
+The test output below is the prior snapshot's 34-test run; it is retained as historical evidence, not the latest result.
+
 test_fetch_saves_delta_without_dropping_older_rows (test_fetch_csv.IncrementalFetchTests.test_fetch_saves_delta_without_dropping_older_rows) ... ok
 test_first_fetch_backfills_five_year_warmup (test_fetch_csv.IncrementalFetchTests.test_first_fetch_backfills_five_year_warmup) ... ok
 test_mature_history_updates_from_recent_overlap (test_fetch_csv.IncrementalFetchTests.test_mature_history_updates_from_recent_overlap) ... ok

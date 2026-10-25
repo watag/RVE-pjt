@@ -11,7 +11,7 @@ import pandas as pd
 LAYER1_DIR = Path(__file__).resolve().parents[1] / "layer1"
 sys.path.insert(0, str(LAYER1_DIR))
 
-from portfolio import calculate_portfolio_returns, calculate_portfolio_risk_vector  # noqa: E402
+from portfolio import calculate_portfolio_returns, calculate_portfolio_risk_vector, calculate_portfolio_risk_history  # noqa: E402
 from risk_metrics import METRICS, calculate_risk_vector  # noqa: E402
 
 
@@ -157,6 +157,42 @@ class PortfolioReturnTests(unittest.TestCase):
         self.assertEqual(result["portfolio_diagnostics"]["invalid_weeks"], 0)
         self.assertAlmostEqual(
             result["sigma"]["value"], np.std(expected_returns.iloc[-52:], ddof=1) * np.sqrt(52)
+        )
+
+    def test_portfolio_history_uses_portfolio_returns_and_preserves_mode(self):
+        dates = pd.date_range("2020-01-03", periods=220, freq="W-FRI")
+        step = np.arange(len(dates), dtype=float)
+        returns = pd.DataFrame({"asset": 0.01 * np.sin(step * 0.11)}, index=dates)
+        anchor_names = [
+            "gold",
+            "us_equity",
+            "japan_equity",
+            "us_treasury",
+            "japan_bond",
+        ]
+        anchors = pd.DataFrame(
+            {
+                name: 0.01 * np.sin(step * (0.03 + position * 0.01))
+                for position, name in enumerate(anchor_names)
+            },
+            index=dates,
+        )
+        threshold_map = {metric: 0.0 for metric in METRICS}
+        history = calculate_portfolio_risk_history(
+            returns,
+            pd.Series({"asset": 1.0}),
+            anchors,
+            threshold_map,
+            mode="scenario",
+            history_weeks=52,
+        )
+
+        self.assertEqual(len(history), 52)
+        self.assertEqual(history[-1]["analysis_mode"], "scenario")
+        self.assertEqual(history[-1]["portfolio_week_status"], "ok")
+        self.assertAlmostEqual(
+            history[-1]["sigma"]["value"],
+            np.std(returns["asset"].to_numpy()[-52:], ddof=1) * np.sqrt(52),
         )
 
     def test_realized_mode_uses_the_historical_weight_series(self):

@@ -164,26 +164,31 @@ def _normalize_metric(
     current_value: float | None,
     current_status: str,
     threshold: float | None,
+    current_position: int | None = None,
+    prior_metric_values: list[tuple[float | None, str]] | None = None,
 ) -> tuple[float | None, str]:
     if threshold is None:
         return None, "configuration_error"
     if current_status != "ok" or current_value is None:
         return None, current_status
 
-    current_position = len(frame) - 1
-    start = current_position - NORMALIZATION_WINDOW
-    if start < 0:
+    history_values = []
+    if current_position is None:
+        current_position = len(frame) - 1
+    if prior_metric_values is None:
+        prior_metric_values = [
+            _metric_at(frame, metric, position)
+            for position in range(current_position)
+        ]
+    for value, status in reversed(prior_metric_values):
+        if status == "ok" and value is not None and np.isfinite(value):
+            history_values.append(value)
+            if len(history_values) == NORMALIZATION_WINDOW:
+                break
+    if len(history_values) < NORMALIZATION_WINDOW:
         return None, "insufficient_history"
 
-    history = [
-        _metric_at(frame, metric, position)
-        for position in range(start, current_position)
-    ]
-    for _, status in history:
-        if status != "ok":
-            return None, status
-
-    values = np.asarray([value for value, _ in history], dtype=float)
+    values = np.asarray(history_values, dtype=float)
     median = float(np.median(values))
     q25, q75 = np.quantile(values, [0.25, 0.75], method="linear")
     iqr = float(q75 - q25)
@@ -194,28 +199,21 @@ def _normalize_metric(
     return (normalized, "ok") if np.isfinite(normalized) else (None, "calculation_error")
 
 
-def calculate_risk_vector(
+def _prepare_frame(
     asset_returns: pd.Series,
     anchor_returns: pd.DataFrame,
-    iqr_thresholds: Mapping[str, float] | None = None,
-    asset_statuses: pd.Series | None = None,
-    anchor_statuses: pd.DataFrame | None = None,
-) -> dict[str, Any]:
-    """Calculate the latest 7D vector from aligned weekly simple returns.
-
-    The inputs must contain one row per week and use a unique ``DatetimeIndex``.
-    Missing observations remain missing; they are never filled with zero or
-    carried forward. Anchor columns use the semantic names in ``ANCHORS``.
-    IQR thresholds must be provided for each metric to produce normalized
-    values. They are deliberately not defaulted without empirical validation.
-    """
+    asset_statuses: pd.Series | None,
+    anchor_statuses: pd.DataFrame | None,
+) -> tuple[pd.DataFrame | None, str | None]:
     if (
         not isinstance(asset_returns, pd.Series)
         or not isinstance(asset_returns.index, pd.DatetimeIndex)
         or asset_returns.index.has_duplicates
     ):
-        return {"as_of": None, **_empty_vector("configuration_error")}
+        return None, "configuration_error"
     asset = pd.to_numeric(asset_returns, errors="coerce").astype(float).sort_index()
+    if asset.empty:
+        return pd.DataFrame(index=asset.index, columns=["asset"], dtype=float), None
     anchors_are_valid = (
         isinstance(anchor_returns, pd.DataFrame)
         and isinstance(anchor_returns.index, pd.DatetimeIndex)
@@ -244,19 +242,81 @@ def calculate_risk_vector(
                 frame[f"{column}_status"] = (
                     anchor_statuses[column].reindex(asset.index).fillna("missing_price").astype(str)
                 )
-    if frame.empty:
-        return {"as_of": None, **_empty_vector("insufficient_history")}
+    return frame, None
 
-    as_of = frame.index[-1].isoformat()
+
+def _vector_at(
+    frame: pd.DataFrame,
+    position: int,
+    iqr_thresholds: Mapping[str, float] | None,
+    metric_cache: dict[str, list[tuple[float | None, str]]] | None = None,
+) -> dict[str, Any]:
+    as_of = frame.index[position].isoformat()
     result: dict[str, Any] = {"as_of": as_of}
     for metric in METRICS:
-        value, status = _metric_at(frame, metric, len(frame) - 1)
+        if metric_cache is None:
+            value, status = _metric_at(frame, metric, position)
+            prior_metric_values = None
+        else:
+            value, status = metric_cache[metric][position]
+            prior_metric_values = metric_cache[metric][:position]
         threshold = _threshold_for(metric, iqr_thresholds)
         normalized, normalization_status = _normalize_metric(
-            frame, metric, value, status, threshold
+            frame,
+            metric,
+            value,
+            status,
+            threshold,
+            current_position=position,
+            prior_metric_values=prior_metric_values,
         )
         item = _record(value, status, normalized, normalization_status)
         item["window_weeks"] = _window_for(metric)
-        item["observation_count"] = _observation_count(frame, metric, len(frame) - 1)
+        item["observation_count"] = _observation_count(frame, metric, position)
         result[metric] = item
     return result
+
+
+def calculate_risk_vector(
+    asset_returns: pd.Series,
+    anchor_returns: pd.DataFrame,
+    iqr_thresholds: Mapping[str, float] | None = None,
+    asset_statuses: pd.Series | None = None,
+    anchor_statuses: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    """Calculate the latest 7D vector from aligned weekly simple returns."""
+    frame, error = _prepare_frame(
+        asset_returns, anchor_returns, asset_statuses, anchor_statuses
+    )
+    if error:
+        return {"as_of": None, **_empty_vector(error)}
+    if frame.empty:
+        return {"as_of": None, **_empty_vector("insufficient_history")}
+    return _vector_at(frame, len(frame) - 1, iqr_thresholds)
+
+
+def calculate_risk_vector_history(
+    asset_returns: pd.Series,
+    anchor_returns: pd.DataFrame,
+    iqr_thresholds: Mapping[str, float] | None = None,
+    asset_statuses: pd.Series | None = None,
+    anchor_statuses: pd.DataFrame | None = None,
+    history_weeks: int = 52,
+) -> list[dict[str, Any]]:
+    """Return one vector per final weekly row, preserving gaps and statuses."""
+    if not isinstance(history_weeks, int) or history_weeks <= 0:
+        raise ValueError("history_weeks_must_be_positive")
+    frame, error = _prepare_frame(
+        asset_returns, anchor_returns, asset_statuses, anchor_statuses
+    )
+    if error or frame is None or frame.empty:
+        return []
+    metric_cache = {
+        metric: [_metric_at(frame, metric, position) for position in range(len(frame))]
+        for metric in METRICS
+    }
+    start = max(0, len(frame) - history_weeks)
+    return [
+        _vector_at(frame, position, iqr_thresholds, metric_cache)
+        for position in range(start, len(frame))
+    ]

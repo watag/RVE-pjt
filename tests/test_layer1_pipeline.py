@@ -68,6 +68,8 @@ class Layer1PipelineTests(unittest.TestCase):
         self.assertIsNone(payload["portfolio"])
         self.assertEqual(payload["portfolio_status"], "not_configured")
         self.assertEqual(payload["portfolio_reason"], "portfolio_configuration_is_null")
+        self.assertIsNone(payload["portfolio_history"])
+        self.assertIsNone(payload["portfolio_holdings"])
         self.assertIn("generated_at", payload)
 
     def test_daily_prices_produce_specification_based_weekly_vector(self):
@@ -205,6 +207,15 @@ class Layer1PipelineTests(unittest.TestCase):
         self.assertEqual(payload["fx_alignment"], "exact_calendar_date_no_fill")
         self.assertEqual(payload["portfolio_mode"], "scenario")
         self.assertEqual(payload["portfolio"]["analysis_mode"], "scenario")
+        self.assertEqual(len(payload["asset_history"]), 52)
+        self.assertEqual(len(payload["portfolio_history"]), 52)
+        self.assertEqual(payload["asset_history"][-1]["as_of"], payload["asset"]["as_of"])
+        self.assertEqual(
+            payload["portfolio_history"][-1]["sigma"]["value"],
+            payload["portfolio"]["sigma"]["value"],
+        )
+        self.assertEqual(payload["portfolio_history"][-1]["analysis_mode"], "scenario")
+        self.assertEqual(payload["portfolio_holdings"]["weights"], {"7203.T": 1.0})
         self.assertIn("generated_at", payload)
         self.assertTrue(
             all(item["normalization_status"] == "ok" for item in payload["asset"].values()

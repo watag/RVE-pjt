@@ -6,37 +6,25 @@ import pandas as pd
 from normalize import robust_normalize
 from beta import calc_all_betas, load_price, calc_log_return
 from volatility import calc_volatility, calc_es
-from risk_metrics import ANCHORS, calculate_risk_vector
+from risk_metrics import ANCHORS, calculate_risk_vector, calculate_risk_vector_history
 from weekly import build_weekly_returns
 from fx import convert_usd_prices_to_jpy
-from portfolio import calculate_portfolio_risk_vector
+from portfolio import calculate_portfolio_risk_vector, calculate_portfolio_risk_history
 
 
-def build_risk_vector_from_daily_prices(
-    asset_prices,
-    anchor_prices,
-    iqr_thresholds=None,
-):
-    """Build the v1.0 weekly risk vector from daily, analysis-currency prices.
-
-    ``asset_prices`` and each value in ``anchor_prices`` must contain ``Date``
-    and ``Close`` columns. Prices must already be in the same analysis currency;
-    USD-to-JPY conversion and source-specific adjusted-price selection happen
-    before this function. The legacy daily log-return builders below remain
-    available for existing callers.
-    """
+def _weekly_return_inputs(asset_prices, anchor_prices):
     if (
         not isinstance(asset_prices, pd.DataFrame)
         or "Date" not in asset_prices.columns
         or "Close" not in asset_prices.columns
     ):
-        invalid_asset = pd.Series(dtype=float, index=pd.Index([]))
-        return calculate_risk_vector(invalid_asset, pd.DataFrame(), iqr_thresholds)
+        invalid_asset = pd.Series(dtype=float, index=pd.DatetimeIndex([]))
+        return invalid_asset, pd.DataFrame(index=invalid_asset.index), pd.Series(dtype=str, index=invalid_asset.index), pd.DataFrame(index=invalid_asset.index)
 
     weekly_asset = build_weekly_returns(asset_prices)
     if weekly_asset.index.hasnans:
-        invalid_asset = pd.Series(dtype=float, index=pd.Index([]))
-        return calculate_risk_vector(invalid_asset, pd.DataFrame(), iqr_thresholds)
+        invalid_asset = pd.Series(dtype=float, index=pd.DatetimeIndex([]))
+        return invalid_asset, pd.DataFrame(index=invalid_asset.index), pd.Series(dtype=str, index=invalid_asset.index), pd.DataFrame(index=invalid_asset.index)
 
     weekly_anchors = {}
     anchor_statuses = {}
@@ -55,10 +43,41 @@ def build_risk_vector_from_daily_prices(
                 anchor_statuses[name] = weekly["return_status"]
 
     anchor_returns = pd.DataFrame(weekly_anchors)
+    return weekly_asset["return"], anchor_returns, weekly_asset["return_status"], pd.DataFrame(anchor_statuses)
+
+
+def build_risk_vector_from_daily_prices(
+    asset_prices,
+    anchor_prices,
+    iqr_thresholds=None,
+):
+    """Build the latest weekly risk vector from aligned daily prices."""
+    asset_returns, anchor_returns, asset_statuses, anchor_statuses = _weekly_return_inputs(
+        asset_prices, anchor_prices
+    )
     return calculate_risk_vector(
-        weekly_asset["return"], anchor_returns, iqr_thresholds,
-        asset_statuses=weekly_asset["return_status"],
-        anchor_statuses=pd.DataFrame(anchor_statuses),
+        asset_returns, anchor_returns, iqr_thresholds,
+        asset_statuses=asset_statuses,
+        anchor_statuses=anchor_statuses,
+    )
+
+
+def build_risk_vector_history_from_daily_prices(
+    asset_prices,
+    anchor_prices,
+    iqr_thresholds=None,
+    history_weeks=52,
+):
+    asset_returns, anchor_returns, asset_statuses, anchor_statuses = _weekly_return_inputs(
+        asset_prices, anchor_prices
+    )
+    return calculate_risk_vector_history(
+        asset_returns,
+        anchor_returns,
+        iqr_thresholds,
+        asset_statuses=asset_statuses,
+        anchor_statuses=anchor_statuses,
+        history_weeks=history_weeks,
     )
 
 
@@ -165,7 +184,12 @@ def main(data_dir=None, output_dir=None, config_path=None):
 
     thresholds = config.get("normalization", {}).get("iqr_thresholds")
     vector = build_risk_vector_from_daily_prices(asset_prices, anchor_prices, thresholds)
+    asset_history = build_risk_vector_history_from_daily_prices(
+        asset_prices, anchor_prices, thresholds, history_weeks=52
+    )
     portfolio_result = None
+    portfolio_history = None
+    portfolio_holdings = None
     portfolio_mode = None
     portfolio_config = config.get("portfolio")
     if portfolio_config is None:
@@ -205,14 +229,40 @@ def main(data_dir=None, output_dir=None, config_path=None):
             if portfolio_returns.empty:
                 raise ValueError("portfolio_has_no_configured_asset_price_series")
 
-            anchor_series = {
-                name: build_weekly_returns(prices)["return"]
+            anchor_weekly = {
+                name: build_weekly_returns(prices)
                 for name, prices in anchor_prices.items()
             }
+            anchor_series = {name: weekly["return"] for name, weekly in anchor_weekly.items()}
+            anchor_status_series = {
+                name: weekly["return_status"] for name, weekly in anchor_weekly.items()
+            }
             portfolio_anchors = pd.DataFrame(anchor_series)
+            portfolio_anchor_statuses = pd.DataFrame(anchor_status_series)
+            if portfolio_mode == "scenario":
+                holdings_date = None
+                holdings = weights
+            else:
+                aligned_weights = weights.reindex(portfolio_returns.index)
+                available_weights = aligned_weights.dropna(how="all")
+                if available_weights.empty:
+                    holdings_date = None
+                    holdings = pd.Series(dtype=float)
+                else:
+                    holdings_date = available_weights.index[-1].isoformat()
+                    holdings = available_weights.iloc[-1].dropna()
+            portfolio_holdings = {
+                "as_of": holdings_date,
+                "weights": {str(symbol): float(value) for symbol, value in holdings.items()},
+            }
             portfolio_result = calculate_portfolio_risk_vector(
                 portfolio_returns, weights, portfolio_anchors, thresholds,
-                mode=portfolio_mode,
+                mode=portfolio_mode, anchor_statuses=portfolio_anchor_statuses,
+            )
+            portfolio_history = calculate_portfolio_risk_history(
+                portfolio_returns, weights, portfolio_anchors, thresholds,
+                mode=portfolio_mode, history_weeks=52,
+                anchor_statuses=portfolio_anchor_statuses,
             )
         except (OSError, TypeError, ValueError, KeyError) as error:
             portfolio_result = {
@@ -230,7 +280,10 @@ def main(data_dir=None, output_dir=None, config_path=None):
         "price_fields": source_metadata,
         "fx_alignment": "exact_calendar_date_no_fill",
         "asset": vector,
+        "asset_history": asset_history,
         "portfolio": portfolio_result,
+        "portfolio_history": portfolio_history,
+        "portfolio_holdings": portfolio_holdings,
         "portfolio_status": portfolio_status,
         "portfolio_reason": portfolio_reason,
         "portfolio_mode": portfolio_mode,

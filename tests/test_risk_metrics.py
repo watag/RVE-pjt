@@ -11,7 +11,7 @@ import pandas as pd
 LAYER1_DIR = Path(__file__).resolve().parents[1] / "layer1"
 sys.path.insert(0, str(LAYER1_DIR))
 
-from risk_metrics import ANCHORS, METRICS, calculate_risk_vector  # noqa: E402
+from risk_metrics import ANCHORS, METRICS, calculate_risk_vector, calculate_risk_vector_history  # noqa: E402
 
 
 def make_weekly_returns(length=220):
@@ -196,6 +196,26 @@ class WeeklyRiskVectorTests(unittest.TestCase):
         self.assertAlmostEqual(result["sigma"]["normalized"], expected)
         self.assertEqual(result["sigma"]["normalization_status"], "ok")
 
+    def test_normalization_skips_invalid_weeks_until_52_valid_metric_values(self):
+        asset, anchors = make_weekly_returns(270)
+        asset.iloc[210] = np.nan
+        result = calculate_risk_vector(asset, anchors, thresholds(1e-12))
+
+        prior_sigma = []
+        for end in range(len(asset) - 2, -1, -1):
+            window = asset.iloc[end - 51 : end + 1]
+            if len(window) == 52 and np.isfinite(window.to_numpy()).all():
+                prior_sigma.append(np.std(window.to_numpy(), ddof=1) * np.sqrt(52))
+                if len(prior_sigma) == 52:
+                    break
+        expected = (
+            result["sigma"]["value"] - np.median(prior_sigma)
+        ) / (np.quantile(prior_sigma, 0.75) - np.quantile(prior_sigma, 0.25))
+
+        self.assertEqual(len(prior_sigma), 52)
+        self.assertAlmostEqual(result["sigma"]["normalized"], expected)
+        self.assertEqual(result["sigma"]["normalization_status"], "ok")
+
     def test_iqr_threshold_equality_and_missing_configuration(self):
         asset, anchors = make_weekly_returns()
         returns = asset.to_numpy()
@@ -239,6 +259,16 @@ class WeeklyRiskVectorTests(unittest.TestCase):
         self.assertEqual(result["sigma"]["status"], "ok")
         self.assertEqual(result["ES"]["status"], "ok")
         self.assertEqual(result["beta_gold"]["status"], "configuration_error")
+
+    def test_vector_history_keeps_last_52_calendar_rows_and_missing_statuses(self):
+        asset, anchors = make_weekly_returns(220)
+        asset.iloc[-10] = np.nan
+        history = calculate_risk_vector_history(asset, anchors, thresholds(1e-12))
+
+        self.assertEqual(len(history), 52)
+        self.assertEqual(history[0]["as_of"], asset.index[-52].isoformat())
+        self.assertEqual(history[-1]["as_of"], asset.index[-1].isoformat())
+        self.assertTrue(any(point["sigma"]["status"] == "missing_price" for point in history))
 
 
 if __name__ == "__main__":

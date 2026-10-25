@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from risk_metrics import calculate_risk_vector
+from risk_metrics import calculate_risk_vector, calculate_risk_vector_history
 
 
 WEIGHT_SUM_TOLERANCE = 1e-9
@@ -126,6 +126,7 @@ def calculate_portfolio_risk_vector(
     anchor_returns: pd.DataFrame,
     iqr_thresholds=None,
     mode: str = "realized",
+    anchor_statuses: pd.DataFrame | None = None,
 ) -> dict:
     """Calculate a portfolio vector from its own weekly return series.
 
@@ -164,6 +165,7 @@ def calculate_portfolio_risk_vector(
         anchor_returns,
         iqr_thresholds,
         asset_statuses=portfolio["status"],
+        anchor_statuses=anchor_statuses,
     )
     vector["analysis_mode"] = mode
     vector["portfolio_status"] = (
@@ -183,3 +185,40 @@ def calculate_portfolio_risk_vector(
         ],
     }
     return vector
+
+
+def calculate_portfolio_risk_history(
+    asset_returns: pd.DataFrame,
+    weights: pd.DataFrame | pd.Series,
+    anchor_returns: pd.DataFrame,
+    iqr_thresholds=None,
+    mode: str = "realized",
+    history_weeks: int = 52,
+    anchor_statuses: pd.DataFrame | None = None,
+) -> list[dict]:
+    """Build historical vectors from portfolio returns, retaining invalid weeks."""
+    if mode == "scenario" and isinstance(weights, pd.Series):
+        if not isinstance(asset_returns, pd.DataFrame):
+            return []
+        weights = pd.DataFrame(
+            np.repeat(weights.to_numpy(dtype=float)[None, :], len(asset_returns), axis=0),
+            index=asset_returns.index,
+            columns=weights.index,
+        )
+    elif mode != "realized" or not isinstance(weights, pd.DataFrame):
+        return []
+
+    portfolio = calculate_portfolio_returns(asset_returns, weights)
+    history = calculate_risk_vector_history(
+        portfolio["portfolio_return"],
+        anchor_returns,
+        iqr_thresholds,
+        asset_statuses=portfolio["status"],
+        anchor_statuses=anchor_statuses,
+        history_weeks=history_weeks,
+    )
+    for vector in history:
+        week = pd.Timestamp(vector["as_of"])
+        vector["analysis_mode"] = mode
+        vector["portfolio_week_status"] = str(portfolio.loc[week, "status"])
+    return history
